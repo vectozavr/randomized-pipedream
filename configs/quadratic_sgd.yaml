@@ -1,0 +1,14 @@
+seed: 7
+objective:
+  kind: quadratic
+  num_examples: 10000
+  num_parameters: 100
+  num_stages: 4
+  batch_size: 100
+  noise_std: 0.0
+method:
+  kind: sgd
+  num_iterations: 120
+  init_mode: zeros
+  learning_rate_scale: 1.0
+  batch_sampling: uniform

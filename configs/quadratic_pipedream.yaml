@@ -1,0 +1,15 @@
+seed: 7
+objective:
+  kind: quadratic
+  num_examples: 10000
+  num_parameters: 100
+  num_stages: 4
+  batch_size: 100
+  noise_std: 0.0
+method:
+  kind: pipedream
+  num_microbatches: 120
+  noam: 4
+  init_mode: zeros
+  batch_sampler_mode: sequential
+  learning_rate_scale: 0.05

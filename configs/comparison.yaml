@@ -1,0 +1,17 @@
+seed: 7
+objective:
+  kind: quadratic
+  num_examples: 10000
+  num_parameters: 100
+  num_stages: 4
+  batch_size: 100
+  noise_std: 0.0
+comparison:
+  num_microbatches: 120
+  noam: 4
+  gpd_delta: 4
+  init_mode: zeros
+  batch_sampler_mode: random
+  learning_rate_scale_pipedream: 0.05
+  learning_rate_scale_gpd: 1.0
+  learning_rate_scale_sgd: 1.0
