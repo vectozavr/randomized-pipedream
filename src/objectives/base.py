@@ -28,6 +28,10 @@ class Objective(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def initial_activation(self, batch: Batch) -> np.ndarray:
+        raise NotImplementedError
+
+    @abstractmethod
     def get_batches(self) -> list[Batch]:
         raise NotImplementedError
 

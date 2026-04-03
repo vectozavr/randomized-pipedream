@@ -23,6 +23,8 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
     next_preference = ["F"] * num_stages
     timeline: Timeline = []
 
+    # This function computes how many microbatches are currently active in
+    # the pipeline (i.e. have started forward but not finished backward).
     def active_microbatches() -> int:
         return sum(
             1
@@ -30,13 +32,16 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
             if f_done[0][mb] is not None and b_done[0][mb] is None
         )
 
+    # cycle until the last microbatch finishes backward on the first stage
     while b_done[0][num_microbatches - 1] is None:
         ops_this_step = [None] * num_stages
 
+        # iterate over stages to find ready forward and backward microbatches
         for stage in range(num_stages):
             ready_f: int | None = None
             ready_b: int | None = None
 
+            # find the earliest ready FORWARD microbatch for this stage
             for mb in range(num_microbatches):
                 if f_done[stage][mb] is not None:
                     continue
@@ -50,18 +55,24 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
                     ready_f = mb
                 break
 
+            # find the earliest ready BACKWARD microbatch for this stage
             for mb in range(num_microbatches):
-                if f_done[stage][mb] is None:
+                if f_done[stage][mb] is None:  # backward can't start until forward is done
                     continue
-                if f_done[stage][mb] >= len(timeline):
+                if f_done[stage][mb] >= len(timeline):  # forward must have started in a previous step
                     continue
-                if b_done[stage][mb] is not None:
+                if b_done[stage][mb] is not None:  # already done
                     continue
 
-                if stage == num_stages - 1:
+                # If we are here then forward is done, it was done on a previous step, and backward is not done yet.
+
+                if stage == num_stages - 1:  # last stage can start backward as soon as forward is done
                     ready_b = mb
                     break
 
+                # for other stages, we also need to check that the next stage has finished backward for this microbatch
+                # and that the next stage's backward for this microbatch started in a previous step
+                # (to avoid starting backward before the next stage has even started)
                 if b_done[stage + 1][mb] is not None and b_done[stage + 1][mb] < len(timeline):
                     ready_b = mb
                     break
@@ -70,19 +81,29 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
 
             if not steady_state[stage]:
                 if ready_b is not None:
+                    # on the startup stage we prefer FORWARD, but as we meet the first BACKWARD we
+                    # make BACKWARD and go to the steady mode, so then we alternate F, B, F, B...
                     chosen = ("B", ready_b)
                     steady_state[stage] = True
                     next_preference[stage] = "F"
                 elif ready_f is not None:
                     chosen = ("F", ready_f)
             else:
+                # here we are already in a steady state, so we alternate between F and B based on the next_preference,
+                # but if the preferred one is not ready we take the other one if it's ready
+
                 pref = next_preference[stage]
+
                 if pref == "B" and ready_b is not None:
+                    # if we prefer B, and it's ready, take it and switch preference to F for the next time
                     chosen = ("B", ready_b)
                     next_preference[stage] = "F"
                 elif pref == "F" and ready_f is not None:
+                    # if we prefer F, and it's ready, take it and switch preference to B for the next time
                     chosen = ("F", ready_f)
                     next_preference[stage] = "B"
+                # in case the preferred one is not ready but the other one is ready we take the other and switch
+                # the preference to the opposite of what will be taken on this step
                 elif ready_b is not None:
                     chosen = ("B", ready_b)
                     next_preference[stage] = "F"
@@ -98,12 +119,12 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
             kind, mb = op
             if kind == "F":
                 f_done[stage][mb] = len(timeline)
-                if stage == 0:
+                if stage == 0:  # only increment launched on the first stage when we actually launch a new microbatch
                     launched += 1
             else:
                 b_done[stage][mb] = len(timeline)
 
-        timeline.append(ops_this_step)
+        timeline.append(ops_this_step)  # append the operations of this step to the timeline
 
     return timeline
 

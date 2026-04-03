@@ -16,6 +16,8 @@ def build_prediction_from_stage_weights(
     return pred
 
 
+# Returns the read indices and the corresponding delays for each stage.
+# The read index for stage s is k - delay_s, where delay_s is sampled according to the specified mode.
 def sample_stale_read_indices(
     k: int,
     num_stages: int,

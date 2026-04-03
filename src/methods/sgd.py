@@ -25,6 +25,7 @@ class SGDMethod(Method):
         num_batches = len(batches)
         num_stages = objective.num_stages
 
+        # Initialize stage weights. The stage_weights is a list of parameters for every stage.
         if self.init_stage_weights is None:
             stage_weights = objective.initial_stage_weights(mode="zeros")
         else:
@@ -44,24 +45,62 @@ class SGDMethod(Method):
                 raise ValueError(f"Unknown batch_sampling: {self.batch_sampling}")
 
             batch = batches[m]
-            Xb, yb = batch
 
-            pred = np.zeros(Xb.shape[0])
-            for s, sl in enumerate(objective.stage_slices):
-                pred += Xb[:, sl] @ stage_weights[s]
+            activations: list[np.ndarray | None] = [None] * (num_stages + 1)
+            caches: list[dict] = [{} for _ in range(num_stages)]
+            activations[0] = objective.initial_activation(batch)
 
-            residual = pred - yb
+            # Full forward pass through all stages using the current model
+            for stage in range(num_stages):
+                activation_in = activations[stage]
+                if activation_in is None:
+                    raise RuntimeError(f"Missing activation for stage {stage} in SGD forward pass")
+
+                activation_out, cache = objective.forward_stage(
+                    batch=batch,
+                    stage=stage,
+                    w_stage=stage_weights[stage],
+                    activation_in=activation_in,
+                )
+                activations[stage + 1] = activation_out
+                caches[stage] = cache
+
+            final_activation = activations[num_stages]
+            if final_activation is None:
+                raise RuntimeError("Missing final activation in SGD")
+
+            _, grad_out = objective.loss_and_output_grad(batch, final_activation)
+
+            # Full backward pass: compute all block gradients first
+            grads: list[np.ndarray | None] = [None] * num_stages
+            current_grad = grad_out
             total_grad_norm_sq = 0.0
 
-            for s, sl in enumerate(objective.stage_slices):
-                grad_s = Xb[:, sl].T @ (residual / len(yb))
-                stage_weights[s] = stage_weights[s] - self.learning_rate * grad_s
-                total_grad_norm_sq += float(np.sum(grad_s ** 2))
+            for stage in range(num_stages - 1, -1, -1):
+                grad_w, grad_in = objective.backward_stage(
+                    batch=batch,
+                    stage=stage,
+                    w_stage=stage_weights[stage],
+                    cache=caches[stage],
+                    grad_out=current_grad,
+                )
+                grads[stage] = grad_w
+                total_grad_norm_sq += float(np.sum(grad_w ** 2))
+                current_grad = grad_in
+
+            # Apply updates simultaneously after all gradients are computed
+            for stage in range(num_stages):
+                grad_w = grads[stage]
+                if grad_w is None:
+                    raise RuntimeError(f"Missing gradient for stage {stage} in SGD")
+                stage_weights[stage] = stage_weights[stage] - self.learning_rate * grad_w
 
             obj_now = objective.full_objective(stage_weights)
             objective_trace.append(obj_now)
             sampled_batches.append(m)
             grad_norm_trace.append(np.sqrt(total_grad_norm_sq))
+
+            # For fair comparison with block-update methods, repeat once per stage
             block_update_objective.extend([obj_now] * num_stages)
 
         return SimulationTrace(

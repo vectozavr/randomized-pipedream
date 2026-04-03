@@ -55,6 +55,10 @@ class QuadraticObjective(Objective):
         xtx = (self.X.T @ self.X) / len(self.X)
         return float(np.linalg.eigvalsh(xtx).max())
 
+    def initial_activation(self, batch: Batch) -> np.ndarray:
+        _, yb = batch
+        return np.zeros(len(yb))
+
     def initial_stage_weights(
         self,
         mode: str = "zeros",

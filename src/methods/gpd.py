@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.methods.base import Method
-from src.methods.utils import build_prediction_from_stage_weights, sample_stale_read_indices
+from src.methods.utils import sample_stale_read_indices
 from src.objectives.base import Objective
 from src.state.trace import SimulationTrace
 from src.utils.partitioning import clone_stage_weights, combine_stage_weights
@@ -29,11 +29,14 @@ class GPDMethod(Method):
         num_stages = objective.num_stages
         num_batches = len(batches)
 
+        # Initialize stage weights. The stage_weights is a list of parameters for every stage.
         if self.init_stage_weights is None:
             stage_weights = objective.initial_stage_weights(mode="zeros")
         else:
             stage_weights = clone_stage_weights(self.init_stage_weights)
 
+        # History of stage weights for all iterations, used for simulating staleness.
+        # Each entry is a list of stage weights at that iteration.
         history = [clone_stage_weights(stage_weights)]
 
         objective_trace = [objective.full_objective(stage_weights)]
@@ -58,6 +61,8 @@ class GPDMethod(Method):
             else:
                 raise ValueError(f"Unknown batch sampling: {self.batch_sampling}")
 
+            # Simulate staleness by sampling read indices for each stage.
+            # The read index determines which iteration's weights are read for that stage.
             read_indices, delays = sample_stale_read_indices(
                 k=k,
                 num_stages=num_stages,
@@ -65,16 +70,59 @@ class GPDMethod(Method):
                 rng=rng,
                 mode=self.stale_sampling,
             )
+
+            # form our weird z weights for all stages based on the sampled read indices
             z_stage_weights = [history[read_indices[ss]][ss].copy() for ss in range(num_stages)]
 
             batch = batches[m]
-            Xb, yb = batch
-            pred_stale = build_prediction_from_stage_weights(Xb, objective.stage_slices, z_stage_weights)
-            residual_stale = pred_stale - yb
 
-            sl = objective.stage_slices[s]
-            grad_s = Xb[:, sl].T @ (residual_stale / len(yb))
+            activations: list[np.ndarray | None] = [None] * (num_stages + 1)
+            caches: list[dict] = [{} for _ in range(num_stages)]
+            activations[0] = objective.initial_activation(batch)
 
+            # Perform a forward pass through all stages using the z_stage_weights.
+            # We also cache any intermediate values needed for the backward pass.
+            for stage in range(num_stages):
+                activation_in = activations[stage]
+                if activation_in is None:
+                    raise RuntimeError(f"Missing activation for stage {stage} in GPD forward pass")
+                activation_out, cache = objective.forward_stage(
+                    batch=batch,
+                    stage=stage,
+                    w_stage=z_stage_weights[stage],
+                    activation_in=activation_in,
+                )
+                activations[stage + 1] = activation_out
+                caches[stage] = cache
+
+            final_activation = activations[num_stages]
+            if final_activation is None:
+                raise RuntimeError("Missing final activation in GPD")
+
+            _, grad_out = objective.loss_and_output_grad(batch, final_activation)
+
+            grad_s: np.ndarray | None = None
+            current_grad = grad_out
+            # Perform a backward pass starting from the last stage down to stage s (which was randomly sampled),
+            # using the cached values and z_stage_weights.
+            for stage in range(num_stages - 1, s - 1, -1):
+                grad_w, grad_in = objective.backward_stage(
+                    batch=batch,
+                    stage=stage,
+                    w_stage=z_stage_weights[stage],
+                    cache=caches[stage],
+                    grad_out=current_grad,
+                )
+                if stage == s:
+                    grad_s = grad_w
+                    break
+                current_grad = grad_in
+
+            if grad_s is None:
+                raise RuntimeError(f"Failed to compute gradient for stage {s} in GPD")
+
+            # Update the stage weights for stage s using the computed gradient.
+            # This simulates a block update for that stage.
             stage_weights[s] = stage_weights[s] - self.learning_rate * grad_s
             stage_update_counts[s] += 1
             history.append(clone_stage_weights(stage_weights))
