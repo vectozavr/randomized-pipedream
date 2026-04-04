@@ -60,8 +60,8 @@ def main() -> None:
     L = objective.smoothness_constant
     init_stage_weights = objective.initial_stage_weights(mode="zeros", seed=args.seed)
 
-    pd_lr = args.pd_lr if args.pd_lr is not None else 0.2 / L
-    gpd_lr = args.gpd_lr if args.gpd_lr is not None else 0.2 / L
+    pd_lr = args.pd_lr if args.pd_lr is not None else 0.5 / L
+    gpd_lr = args.gpd_lr if args.gpd_lr is not None else 0.5 / L
     sgd_lr = args.sgd_lr if args.sgd_lr is not None else 0.8 / L
     gpd_delta = args.gpd_delta if args.gpd_delta is not None else args.num_stages
 
@@ -90,7 +90,7 @@ def main() -> None:
 
     print("\nPipeDream schedule:")
     print_schedule(timeline)
-    fig_sched, ax_sched = plot_schedule(timeline, startup_boundary=args.num_stages)
+    fig_sched, ax_sched = plot_schedule(timeline, startup_boundary=args.num_stages, reduce_text=True)
     fig_sched.savefig(save_dir / "schedule.png", dpi=200, bbox_inches="tight")
 
     num_dataset_batches = len(objective.get_batches())

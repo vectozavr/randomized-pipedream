@@ -147,6 +147,9 @@ def plot_schedule(
     timeline: Timeline,
     startup_boundary: int | None = None,
     figsize: tuple[float, float] = (14.0, 4.0),
+    *,
+    reduce_text: bool = False,
+    max_xtick_labels: int = 30
 ):
     num_steps = len(timeline)
     num_stages = len(timeline[0])
@@ -180,26 +183,55 @@ def plot_schedule(
             )
             ax.add_patch(rect)
 
-            ax.text(
-                t + 0.5,
-                y + 0.5,
-                str(mb + 1),
-                ha='center',
-                va='center',
-                fontsize=15,
-                color='white',
-                fontweight='bold'
-            )
+            if not reduce_text:
+                ax.text(
+                    t + 0.5,
+                    y + 0.5,
+                    str(mb + 1),
+                    ha='center',
+                    va='center',
+                    fontsize=15,
+                    color='white',
+                    fontweight='bold'
+                )
 
     if startup_boundary is not None:
         ax.axvline(startup_boundary, color='black', linestyle='--', linewidth=1.2)
-        ax.text(startup_boundary / 2, -0.45, 'Startup', ha='center', va='center', fontsize=11)
-        ax.text((startup_boundary + num_steps) / 2, -0.45, 'Steady / transition', ha='center', va='center', fontsize=11)
+
+        phase_y = -0.75
+
+        ax.text(
+            startup_boundary / 2,
+            phase_y,
+            'Startup',
+            ha='center',
+            va='center',
+            fontsize=11
+        )
+        ax.text(
+            (startup_boundary + num_steps) / 2,
+            phase_y,
+            'Steady / transition',
+            ha='center',
+            va='center',
+            fontsize=11
+        )
 
     ax.set_xlim(0, num_steps)
     ax.set_ylim(0, num_stages)
-    ax.set_xticks(np.arange(num_steps) + 0.5)
-    ax.set_xticklabels(np.arange(num_steps))
+
+    if num_steps <= max_xtick_labels:
+        tick_positions = np.arange(num_steps) + 0.5
+        tick_labels = np.arange(num_steps)
+    else:
+        tick_indices = np.linspace(0, num_steps - 1, max_xtick_labels, dtype=int)
+        tick_indices = np.unique(tick_indices)
+        tick_positions = tick_indices + 0.5
+        tick_labels = tick_indices
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels)
+
     ax.set_yticks(np.arange(num_stages) + 0.5)
     ax.set_yticklabels([f'Machine {i + 1}' for i in range(num_stages)][::-1])
     ax.set_xlabel('Time step')
@@ -224,6 +256,8 @@ def plot_schedule(
     legend.set_zorder(1000)
 
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.22)
+
     return fig, ax
 
 

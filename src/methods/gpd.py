@@ -35,7 +35,6 @@ class GPDMethod(Method):
     stale_sampling: str = "uniform"
 
     training_batch_indices: list[int] | None = None
-    weights_staleness: np.ndarray | None = None  # shape: (num_iterations, num_stages)
     timeline: Timeline = None
 
     init_stage_weights: list[np.ndarray] | None = None
