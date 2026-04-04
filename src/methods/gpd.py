@@ -20,6 +20,7 @@ class GPDMethod(Method):
     stage_sampling: str = "uniform"
     batch_sampling: str = "uniform"
     stale_sampling: str = "uniform"
+    training_batch_indices: list[int] | None = None
     init_stage_weights: list[np.ndarray] | None = None
     name: str = "GPD"
 
@@ -28,6 +29,15 @@ class GPDMethod(Method):
         batches = objective.get_batches()
         num_stages = objective.num_stages
         num_batches = len(batches)
+
+        if self.training_batch_indices is None:
+            available_batch_indices = list(range(num_batches))
+        else:
+            available_batch_indices = list(self.training_batch_indices)
+            if len(available_batch_indices) == 0:
+                raise ValueError("training_batch_indices must not be empty")
+            if min(available_batch_indices) < 0 or max(available_batch_indices) >= num_batches:
+                raise ValueError("training_batch_indices contains invalid batch ids")
 
         # Initialize stage weights. The stage_weights is a list of parameters for every stage.
         if self.init_stage_weights is None:
@@ -55,9 +65,10 @@ class GPDMethod(Method):
                 raise ValueError(f"Unknown stage sampling: {self.stage_sampling}")
 
             if self.batch_sampling == "uniform":
-                m = int(rng.integers(0, num_batches))
+                idx = int(rng.integers(0, len(available_batch_indices)))
+                m = int(available_batch_indices[idx])
             elif self.batch_sampling == "cyclic":
-                m = k % num_batches
+                m = int(available_batch_indices[k % len(available_batch_indices)])
             else:
                 raise ValueError(f"Unknown batch sampling: {self.batch_sampling}")
 

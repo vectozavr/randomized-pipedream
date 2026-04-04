@@ -6,6 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.utils.batching import build_training_batch_schedule
 from src.objectives.quadratic import QuadraticObjective
 from src.schedulers.pipedream_1f1b import PipeDream1F1BScheduler, print_schedule, plot_schedule
 from src.methods.pipedream import PipeDreamMethod
@@ -86,18 +87,21 @@ def main() -> None:
 
     print("\nPipeDream schedule:")
     print_schedule(timeline)
-
     fig_sched, ax_sched = plot_schedule(timeline, startup_boundary=args.num_stages)
     fig_sched.savefig(save_dir / "schedule.png", dpi=200, bbox_inches="tight")
 
-    rng = np.random.default_rng(args.seed + 1)
-    num_batches = len(objective.get_batches())
-    selected_batch_indices = rng.integers(0, num_batches, size=args.num_microbatches).tolist()
+    num_dataset_batches = len(objective.get_batches())
+    training_batch_indices = build_training_batch_schedule(
+        num_dataset_batches=num_dataset_batches,
+        num_microbatches=args.num_microbatches,
+        shuffle_each_epoch=False,  # or True if you want shuffled epochs
+        seed=args.seed + 1,
+    )
 
     pipedream_method = PipeDreamMethod(
         timeline=timeline,
         learning_rate=pd_lr,
-        selected_batch_indices=selected_batch_indices,
+        training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
         name="PipeDream",
     )
@@ -115,6 +119,7 @@ def main() -> None:
         stage_sampling="uniform",
         batch_sampling="uniform",
         stale_sampling="uniform",
+        training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
         name="GPD",
     )
@@ -124,6 +129,7 @@ def main() -> None:
         learning_rate=sgd_lr,
         seed=args.sgd_seed,
         batch_sampling="uniform",
+        training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
         name="SGD",
     )

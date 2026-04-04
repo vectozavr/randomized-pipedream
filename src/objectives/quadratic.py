@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -15,6 +16,9 @@ class QuadraticObjective(Objective):
     y: np.ndarray
     num_pipeline_stages: int
     batch_size: int
+    kind: Literal["random", "simple"] = "random"
+    true_w: np.ndarray | None = None
+    analytic_L: float | None = None
 
     def __post_init__(self) -> None:
         self._stage_slices = make_stage_slices(self.X.shape[1], self.num_pipeline_stages)
@@ -29,14 +33,61 @@ class QuadraticObjective(Objective):
         batch_size: int,
         seed: int = 0,
         noise_std: float = 0.0,
+        kind: Literal["random", "simple"] = "random",
     ) -> "QuadraticObjective":
         rng = np.random.default_rng(seed)
-        X = rng.normal(size=(num_examples, num_parameters))
-        true_w = rng.normal(size=(num_parameters,))
-        y = X @ true_w
-        if noise_std > 0.0:
-            y = y + noise_std * rng.normal(size=y.shape)
-        return cls(X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size)
+
+        if kind == "random":
+            X = rng.normal(size=(num_examples, num_parameters))
+            true_w = rng.normal(size=(num_parameters,))
+            y = X @ true_w
+            if noise_std > 0.0:
+                y = y + noise_std * rng.normal(size=y.shape)
+
+            return cls(
+                X=X,
+                y=y,
+                num_pipeline_stages=num_stages,
+                batch_size=batch_size,
+                kind="random",
+                true_w=true_w,
+                analytic_L=None,
+            )
+
+        if kind == "simple":
+            n = num_examples
+            d = num_parameters
+            r = min(n, d)
+
+            # Choose the nonzero eigenvalues of (X^T X) / n explicitly.
+            # If n >= d, this gives a full-rank quadratic.
+            # If n < d, the remaining d-r eigenvalues are necessarily zero.
+            lambdas = np.linspace(1.0, float(r), r)
+            analytic_L = float(lambdas.max())
+
+            # Build matrices U in R^{n x r}, V in R^{d x r} with orthonormal columns.
+            # Then X = sqrt(n) * U * diag(sqrt(lambdas)) * V^T
+            # implies that X^T X / n has eigenvalues lambdas (plus zeros if d > r).
+            U, _ = np.linalg.qr(rng.normal(size=(n, r)))
+            V, _ = np.linalg.qr(rng.normal(size=(d, r)))
+            X = np.sqrt(n) * U @ np.diag(np.sqrt(lambdas)) @ V.T
+
+            true_w = rng.normal(size=(d,))
+            y = X @ true_w
+            if noise_std > 0.0:
+                y = y + noise_std * rng.normal(size=y.shape)
+
+            return cls(
+                X=X,
+                y=y,
+                num_pipeline_stages=num_stages,
+                batch_size=batch_size,
+                kind="simple",
+                true_w=true_w,
+                analytic_L=analytic_L,
+            )
+
+        raise ValueError(f"Unknown quadratic kind: {kind}")
 
     @property
     def num_stages(self) -> int:
@@ -54,6 +105,15 @@ class QuadraticObjective(Objective):
     def smoothness_constant(self) -> float:
         xtx = (self.X.T @ self.X) / len(self.X)
         return float(np.linalg.eigvalsh(xtx).max())
+
+    @property
+    def true_smoothness_constant(self) -> float | None:
+        return self.analytic_L
+
+    def check_smoothness_constant(self, atol: float = 1e-10, rtol: float = 1e-10) -> bool:
+        if self.analytic_L is None:
+            raise ValueError("Analytic smoothness constant is available only for kind='simple'.")
+        return np.isclose(self.smoothness_constant, self.analytic_L, atol=atol, rtol=rtol)
 
     def initial_activation(self, batch: Batch) -> np.ndarray:
         _, yb = batch

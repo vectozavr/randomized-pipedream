@@ -22,6 +22,30 @@ def build_batches(X: np.ndarray, y: np.ndarray, batch_size: int) -> list[Batch]:
     return batches
 
 
+def build_training_batch_schedule(
+    num_dataset_batches: int,
+    num_microbatches: int,
+    *,
+    shuffle_each_epoch: bool = False,
+    seed: int = 0,
+) -> list[int]:
+    if num_dataset_batches <= 0:
+        raise ValueError("num_dataset_batches must be positive")
+    if num_microbatches <= 0:
+        raise ValueError("num_microbatches must be positive")
+
+    rng = np.random.default_rng(seed)
+    schedule: list[int] = []
+
+    while len(schedule) < num_microbatches:
+        epoch = np.arange(num_dataset_batches)
+        if shuffle_each_epoch:
+            rng.shuffle(epoch)
+        schedule.extend(epoch.tolist())
+
+    return schedule[:num_microbatches]
+
+
 @dataclass
 class BatchSampler:
     num_batches: int

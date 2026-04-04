@@ -17,7 +17,7 @@ from src.utils.partitioning import clone_stage_weights, combine_stage_weights
 class PipeDreamMethod(Method):
     timeline: Timeline
     learning_rate: float
-    selected_batch_indices: list[int]
+    training_batch_indices: list[int]
     init_stage_weights: list[np.ndarray] | None = None
     name: str = "PipeDream"
 
@@ -26,8 +26,8 @@ class PipeDreamMethod(Method):
         num_microbatches = num_microbatches_from_timeline(self.timeline)
         batches = objective.get_batches()
 
-        if len(self.selected_batch_indices) < num_microbatches:
-            raise ValueError("selected_batch_indices must cover all microbatches in the timeline")
+        if len(self.training_batch_indices) < num_microbatches:
+            raise ValueError("training_batch_indices must cover all microbatches in the timeline")
 
         # Initialize stage weights. The stage_weights is a list of parameters for every stage.
         if self.init_stage_weights is None:
@@ -64,8 +64,8 @@ class PipeDreamMethod(Method):
                     if stage == 0:
                         # For the first stage, we need to initialize the microbatch runtime state
                         # and load the input batch.
-                        batch_id = self.selected_batch_indices[mb]
-                        Xb, yb = batches[batch_id]
+                        batch_id = self.training_batch_indices[mb]
+                        batch = batches[batch_id]
                         micro[mb] = MicrobatchRuntime(
                             batch_id=batch_id,
                             activations=[None] * (num_stages + 1),
@@ -74,7 +74,7 @@ class PipeDreamMethod(Method):
                             stashed_versions=[None] * num_stages,
                             loss_on_forward=None,
                         )
-                        micro[mb].activations[0] = np.zeros(len(yb))
+                        micro[mb].activations[0] = objective.initial_activation(batch)
 
                     # For subsequent stages, we assume the microbatch runtime state has been
                     # initialized during the forward pass of stage 0.
@@ -188,7 +188,7 @@ class PipeDreamMethod(Method):
         metadata = {
             "time_completed": np.array(time_completed),
             "completion_objective": np.array(completion_objective),
-            "selected_batch_indices": np.array(self.selected_batch_indices[:num_microbatches]),
+            "training_batch_indices": np.array(self.training_batch_indices[:num_microbatches]),
             "final_weight": combine_stage_weights(stage_weights),
         }
 
