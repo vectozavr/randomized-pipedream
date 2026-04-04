@@ -7,9 +7,21 @@ import numpy as np
 from src.methods.base import Method
 from src.methods.utils import sample_stale_read_indices
 from src.objectives.base import Objective
+from src.state import Timeline
 from src.state.trace import SimulationTrace
 from src.utils.partitioning import clone_stage_weights, combine_stage_weights
 
+
+def extract_pipedream_backward_ops(timeline):
+    backward_ops = []
+    for ops_this_step in timeline:
+        for stage, op in enumerate(ops_this_step):
+            if op is None:
+                continue
+            kind, mb = op
+            if kind == "B":
+                backward_ops.append((stage, mb))
+    return backward_ops
 
 @dataclass
 class GPDMethod(Method):
@@ -17,10 +29,15 @@ class GPDMethod(Method):
     learning_rate: float
     delta: int
     seed: int = 0
+
     stage_sampling: str = "uniform"
     batch_sampling: str = "uniform"
     stale_sampling: str = "uniform"
+
     training_batch_indices: list[int] | None = None
+    weights_staleness: np.ndarray | None = None  # shape: (num_iterations, num_stages)
+    timeline: Timeline = None
+
     init_stage_weights: list[np.ndarray] | None = None
     name: str = "GPD"
 
@@ -38,6 +55,18 @@ class GPDMethod(Method):
                 raise ValueError("training_batch_indices must not be empty")
             if min(available_batch_indices) < 0 or max(available_batch_indices) >= num_batches:
                 raise ValueError("training_batch_indices contains invalid batch ids")
+
+        pipedream_backward_ops = None
+        if self.stage_sampling == "pipedream" or self.batch_sampling == "pipedream":
+            if self.timeline is None:
+                raise ValueError(
+                    "timeline must be provided when sampling_order='pipedream' "
+                    "or blocks_update_order='pipedream'"
+                )
+            pipedream_backward_ops = extract_pipedream_backward_ops(self.timeline)
+            if len(pipedream_backward_ops) == 0:
+                raise ValueError("timeline contains no backward operations")
+
 
         # Initialize stage weights. The stage_weights is a list of parameters for every stage.
         if self.init_stage_weights is None:
@@ -59,8 +88,13 @@ class GPDMethod(Method):
         stage_update_counts = np.zeros(num_stages, dtype=int)
 
         for k in range(self.num_iterations):
+
+            mb_pd = None
             if self.stage_sampling == "uniform":
                 s = int(rng.integers(0, num_stages))
+            elif self.stage_sampling == "pipedream":
+                assert pipedream_backward_ops is not None
+                s, mb_pd = pipedream_backward_ops[k % len(pipedream_backward_ops)]
             else:
                 raise ValueError(f"Unknown stage sampling: {self.stage_sampling}")
 
@@ -69,18 +103,39 @@ class GPDMethod(Method):
                 m = int(available_batch_indices[idx])
             elif self.batch_sampling == "cyclic":
                 m = int(available_batch_indices[k % len(available_batch_indices)])
+            elif self.batch_sampling == "pipedream":
+                assert pipedream_backward_ops is not None
+                if self.training_batch_indices is None:
+                    raise ValueError(
+                        "training_batch_indices must be provided when sampling_order='pipedream'"
+                    )
+                if mb_pd is None:
+                    _, mb_pd = pipedream_backward_ops[k % len(pipedream_backward_ops)]
+                if mb_pd >= len(self.training_batch_indices):
+                    raise ValueError(
+                        f"PipeDream microbatch index {mb_pd} is out of range for "
+                        f"training_batch_indices of length {len(self.training_batch_indices)}"
+                    )
+                m = int(self.training_batch_indices[mb_pd])
             else:
                 raise ValueError(f"Unknown batch sampling: {self.batch_sampling}")
 
             # Simulate staleness by sampling read indices for each stage.
             # The read index determines which iteration's weights are read for that stage.
-            read_indices, delays = sample_stale_read_indices(
-                k=k,
-                num_stages=num_stages,
-                delta=self.delta,
-                rng=rng,
-                mode=self.stale_sampling,
-            )
+            if self.stale_sampling == "uniform":
+                read_indices, delays = sample_stale_read_indices(
+                    k=k,
+                    num_stages=num_stages,
+                    delta=self.delta,
+                    rng=rng,
+                    mode="uniform",
+                )
+            elif self.stale_sampling == "pipedream":
+                delays = np.array(
+                    [min((num_stages - 1) - s, k) for s in range(num_stages)],
+                    dtype=int,
+                )
+                read_indices = np.array([k - d for d in delays], dtype=int)
 
             # form our weird z weights for all stages based on the sampled read indices
             z_stage_weights = [history[read_indices[ss]][ss].copy() for ss in range(num_stages)]

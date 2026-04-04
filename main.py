@@ -19,11 +19,11 @@ from src.plotting.convergence import plot_block_update_comparison
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run PipeDream / GPD / SGD debug experiment.")
-    parser.add_argument("--num-examples", type=int, default=512)
     parser.add_argument("--num-parameters", type=int, default=64)
     parser.add_argument("--num-stages", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-microbatches", type=int, default=8)
+    parser.add_argument("--num-microbatches", type=int, default=100)
+    parser.add_argument("--num-epochs", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--noise-std", type=float, default=0.0)
 
@@ -46,8 +46,10 @@ def main() -> None:
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    num_examples = args.batch_size * args.num_microbatches // args.num_epochs
+
     objective = QuadraticObjective.synthetic(
-        num_examples=args.num_examples,
+        num_examples=num_examples,
         num_parameters=args.num_parameters,
         num_stages=args.num_stages,
         batch_size=args.batch_size,
@@ -58,18 +60,19 @@ def main() -> None:
     L = objective.smoothness_constant
     init_stage_weights = objective.initial_stage_weights(mode="zeros", seed=args.seed)
 
-    pd_lr = args.pd_lr if args.pd_lr is not None else 0.5 / L
-    gpd_lr = args.gpd_lr if args.gpd_lr is not None else 0.5 / L
-    sgd_lr = args.sgd_lr if args.sgd_lr is not None else 1.0 / L
+    pd_lr = args.pd_lr if args.pd_lr is not None else 0.2 / L
+    gpd_lr = args.gpd_lr if args.gpd_lr is not None else 0.2 / L
+    sgd_lr = args.sgd_lr if args.sgd_lr is not None else 0.8 / L
     gpd_delta = args.gpd_delta if args.gpd_delta is not None else args.num_stages
 
     print("=" * 80)
     print("DEBUG RUN CONFIG")
-    print(f"num_examples      = {args.num_examples}")
+    print(f"num_examples      = {num_examples}")
     print(f"num_parameters    = {args.num_parameters}")
     print(f"num_stages        = {args.num_stages}")
     print(f"batch_size        = {args.batch_size}")
     print(f"num_microbatches  = {args.num_microbatches}")
+    print(f"num_epochs         = {args.num_epochs}")
     print(f"seed              = {args.seed}")
     print(f"noise_std         = {args.noise_std}")
     print(f"L                 = {L:.6e}")
@@ -116,9 +119,10 @@ def main() -> None:
         learning_rate=gpd_lr,
         delta=gpd_delta,
         seed=args.gpd_seed,
-        stage_sampling="uniform",
-        batch_sampling="uniform",
-        stale_sampling="uniform",
+        stage_sampling="pipedream",
+        batch_sampling="pipedream",
+        stale_sampling="pipedream",
+        timeline=timeline,
         training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
         name="GPD",
