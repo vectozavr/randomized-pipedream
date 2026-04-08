@@ -18,6 +18,16 @@ class Objective(ABC):
     def stage_slices(self) -> list[slice]:
         raise NotImplementedError
 
+    @property
+    @abstractmethod
+    def smoothness_constant(self) -> float:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def optimal_objective_value(self) -> float:
+        raise NotImplementedError
+
     @abstractmethod
     def initial_stage_weights(
         self,
@@ -37,6 +47,10 @@ class Objective(ABC):
 
     @abstractmethod
     def full_objective(self, stage_weights: list[np.ndarray]) -> float:
+        raise NotImplementedError
+
+    @abstractmethod
+    def full_gradient(self, stage_weights: list[np.ndarray]) -> list[np.ndarray]:
         raise NotImplementedError
 
     @abstractmethod

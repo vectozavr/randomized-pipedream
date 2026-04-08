@@ -35,6 +35,13 @@ class PipeDreamMethod(Method):
         else:
             stage_weights = clone_stage_weights(self.init_stage_weights)
 
+        def compute_full_grad_norm_sq(current_stage_weights: list[np.ndarray]) -> float:
+            full_grad = objective.full_gradient(current_stage_weights)
+            return float(sum(np.sum(g ** 2) for g in full_grad))
+
+        forward_history_indices = -np.ones((num_microbatches, num_stages), dtype=int)
+        history = [clone_stage_weights(stage_weights)]
+
         # Track versions of weights for staleness calculation and debugging.
         # In a real implementation, we would only need to track the version of the weights at the time
         # of the forward pass for each microbatch, but here we track all versions for easier debugging and analysis.
@@ -52,6 +59,13 @@ class PipeDreamMethod(Method):
         stage_version_history = [versions.snapshot()]  # Track version history for debugging and analysis.
         time_completed = [0]
         completion_objective: list[float] = []
+
+
+        initial_full_grad_norm_sq = compute_full_grad_norm_sq(stage_weights)
+        full_grad_norm_sq_trace = [initial_full_grad_norm_sq]
+        avg_full_grad_norm_sq_trace = [initial_full_grad_norm_sq]
+        cumulative_full_grad_norm_sq = initial_full_grad_norm_sq
+        grad_norm_trace: list[float] = []
 
         for t, ops in enumerate(self.timeline):  # Iterate over time steps and operations in the timeline.
             for stage, op in enumerate(ops):  # Iterate over stages & their corresponding operations at this time step.
@@ -80,6 +94,9 @@ class PipeDreamMethod(Method):
                     # initialized during the forward pass of stage 0.
                     state = micro[mb]
                     batch = batches[state.batch_id]
+
+                    current_history_index = len(history) - 1
+                    forward_history_indices[mb, stage] = current_history_index
 
                     # We take the currently available weights (last version) and perform weights stashing.
                     w_used = stage_weights[stage].copy()
@@ -136,6 +153,8 @@ class PipeDreamMethod(Method):
                         grad_out=grad_out,
                     )
 
+                    grad_norm_trace.append(float(np.linalg.norm(grad_w)))
+
                     stale_version = state.stashed_versions[stage]
                     if stale_version is None:
                         raise RuntimeError(f"Missing stashed version for stage {stage}, microbatch {mb}")
@@ -150,6 +169,7 @@ class PipeDreamMethod(Method):
                     # locking or atomic updates, but here we do it synchronously for simplicity.
                     stage_weights[stage] = stage_weights[stage] - self.learning_rate * grad_w
                     versions.increment(stage)
+                    history.append(clone_stage_weights(stage_weights))
 
                     # After the backward pass, the gradient to send to the previous stage becomes available.
                     if stage > 0:
@@ -164,6 +184,12 @@ class PipeDreamMethod(Method):
                     block_update_objective.append(current_obj)  # update after each backward update
                     if stage == 0:
                         completion_objective.append(current_obj)  # update after backward pass on stage 0.
+
+                    full_grad_norm_sq_now = compute_full_grad_norm_sq(stage_weights)
+                    full_grad_norm_sq_trace.append(full_grad_norm_sq_now)
+                    cumulative_full_grad_norm_sq += full_grad_norm_sq_now
+                    avg_full_grad_norm_sq_trace.append(cumulative_full_grad_norm_sq / len(full_grad_norm_sq_trace))
+
                 else:
                     raise ValueError(f"Unknown op kind: {kind}")
 
@@ -190,6 +216,7 @@ class PipeDreamMethod(Method):
             "completion_objective": np.array(completion_objective),
             "training_batch_indices": np.array(self.training_batch_indices[:num_microbatches]),
             "final_weight": combine_stage_weights(stage_weights),
+            "forward_history_indices": forward_history_indices,
         }
 
         return SimulationTrace(
@@ -200,5 +227,10 @@ class PipeDreamMethod(Method):
             forward_versions=forward_versions,
             backward_versions=backward_versions,
             backward_staleness=backward_staleness,
+
+            grad_norm_trace=np.array(grad_norm_trace),
+            full_grad_norm_sq_trace=np.array(full_grad_norm_sq_trace),
+            avg_full_grad_norm_sq_trace=np.array(avg_full_grad_norm_sq_trace),
+
             metadata=metadata,
         )

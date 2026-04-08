@@ -107,6 +107,12 @@ class QuadraticObjective(Objective):
         return float(np.linalg.eigvalsh(xtx).max())
 
     @property
+    def optimal_objective_value(self) -> float:
+        w_star, *_ = np.linalg.lstsq(self.X, self.y, rcond=None)
+        residual = self.X @ w_star - self.y
+        return float(0.5 * np.mean(residual ** 2))
+
+    @property
     def true_smoothness_constant(self) -> float | None:
         return self.analytic_L
 
