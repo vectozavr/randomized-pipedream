@@ -6,6 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.methods.localSGD import LocalMinibatchSGD1F1BMethod
+from src.schedulers.independent_local_sgd_pipeline import IndependentLocalSGDScheduler
 from src.utils.batching import build_training_batch_schedule
 from src.objectives.quadratic import QuadraticObjective
 from src.schedulers.pipedream_1f1b import PipeDream1F1BScheduler, print_schedule, plot_schedule
@@ -293,7 +295,49 @@ def plot_delay_stats_vs_num_stages_from_file_with_quadratic_fit(
 def main() -> None:
     args = build_parser().parse_args()
     #plot_delay_stats_vs_num_stages(args, max_num_stages=150)
-    plot_delay_stats_vs_num_stages_from_file_with_quadratic_fit(args)
+    #plot_delay_stats_vs_num_stages_from_file_with_quadratic_fit(args)
+
+    num_examples = args.batch_size * args.num_microbatches // args.num_epochs
+
+    objective = QuadraticObjective.synthetic(
+        num_examples=num_examples,
+        num_parameters=args.num_parameters,
+        num_stages=args.num_stages,
+        batch_size=args.batch_size,
+        seed=args.seed,
+        noise_std=args.noise_std,
+    )
+
+    init_stage_weights = objective.initial_stage_weights(mode="zeros", seed=args.seed)
+
+    scheduler = IndependentLocalSGDScheduler(num_runs=4, local_steps=5)
+    timeline = scheduler.generate(
+        num_stages=args.num_stages,
+        num_microbatches=args.num_microbatches,
+    )
+
+    num_dataset_batches = len(objective.get_batches())
+    training_batch_indices = build_training_batch_schedule(
+        num_dataset_batches=num_dataset_batches,
+        num_microbatches=args.num_microbatches,
+        shuffle_each_epoch=False,  # or True if you want shuffled epochs
+        seed=args.seed + 1,
+    )
+
+    local_sgd_method = LocalMinibatchSGD1F1BMethod(
+        timeline=timeline,
+        learning_rate=1e-2,
+        training_batch_indices=training_batch_indices,
+        init_stage_weights=init_stage_weights,
+        name="Local SGD",
+        num_runs=4,
+        local_steps=5,
+    )
+
+    runner = ExperimentRunner(objective=objective)
+    sgd_trace = runner.run(local_sgd_method)
+
+    print(sgd_trace)
 
     '''
     save_dir = Path(args.save_dir)
