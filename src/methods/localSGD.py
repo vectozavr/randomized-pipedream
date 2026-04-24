@@ -120,8 +120,13 @@ class LocalMinibatchSGD1F1BMethod(Method):
                     grad_out = state.grad_to_left
 
                     stashed = state.stashed_weights[stage]
-                    grad_w, grad_in = objective.backward_stage(batch=batch, stage=stage, w_stage=stashed, cache={},
-                                                               grad_out=grad_out)
+                    grad_w, grad_in = objective.backward_stage(
+                        batch=batch,
+                        stage=stage,
+                        w_stage=stashed,
+                        cache={"activation_in": state.activations[stage]},
+                        grad_out=grad_out
+                    )
 
                     grad_norm_trace.append(float(np.linalg.norm(grad_w)))
                     backward_versions[mb, stage] = int(state.stashed_versions[stage])

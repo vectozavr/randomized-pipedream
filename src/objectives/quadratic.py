@@ -16,7 +16,7 @@ class QuadraticObjective(Objective):
     y: np.ndarray
     num_pipeline_stages: int
     batch_size: int
-    kind: Literal["random", "simple"] = "random"
+    kind: Literal["random", "simple", "tridiagonal"] = "random"
     true_w: np.ndarray | None = None
     analytic_L: float | None = None
 
@@ -26,14 +26,15 @@ class QuadraticObjective(Objective):
 
     @classmethod
     def synthetic(
-        cls,
-        num_examples: int,
-        num_parameters: int,
-        num_stages: int,
-        batch_size: int,
-        seed: int = 0,
-        noise_std: float = 0.0,
-        kind: Literal["random", "simple"] = "random",
+            cls,
+            num_examples: int,
+            num_parameters: int,
+            num_stages: int,
+            batch_size: int,
+            seed: int = 0,
+            noise_std: float = 0.0,
+            kind: Literal["random", "simple", "tridiagonal"] = "random",
+            condition_number: float | None = None,
     ) -> "QuadraticObjective":
         rng = np.random.default_rng(seed)
 
@@ -45,29 +46,17 @@ class QuadraticObjective(Objective):
                 y = y + noise_std * rng.normal(size=y.shape)
 
             return cls(
-                X=X,
-                y=y,
-                num_pipeline_stages=num_stages,
-                batch_size=batch_size,
-                kind="random",
-                true_w=true_w,
-                analytic_L=None,
+                X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size,
+                kind="random", true_w=true_w, analytic_L=None,
             )
 
         if kind == "simple":
-            n = num_examples
-            d = num_parameters
+            n, d = num_examples, num_parameters
             r = min(n, d)
 
-            # Choose the nonzero eigenvalues of (X^T X) / n explicitly.
-            # If n >= d, this gives a full-rank quadratic.
-            # If n < d, the remaining d-r eigenvalues are necessarily zero.
             lambdas = np.linspace(1.0, float(r), r)
             analytic_L = float(lambdas.max())
 
-            # Build matrices U in R^{n x r}, V in R^{d x r} with orthonormal columns.
-            # Then X = sqrt(n) * U * diag(sqrt(lambdas)) * V^T
-            # implies that X^T X / n has eigenvalues lambdas (plus zeros if d > r).
             U, _ = np.linalg.qr(rng.normal(size=(n, r)))
             V, _ = np.linalg.qr(rng.normal(size=(d, r)))
             X = np.sqrt(n) * U @ np.diag(np.sqrt(lambdas)) @ V.T
@@ -78,13 +67,62 @@ class QuadraticObjective(Objective):
                 y = y + noise_std * rng.normal(size=y.shape)
 
             return cls(
-                X=X,
-                y=y,
-                num_pipeline_stages=num_stages,
-                batch_size=batch_size,
-                kind="simple",
-                true_w=true_w,
-                analytic_L=analytic_L,
+                X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size,
+                kind="simple", true_w=true_w, analytic_L=analytic_L,
+            )
+
+        if kind == "tridiagonal":
+            n, d = num_examples, num_parameters
+            if n < d:
+                raise ValueError("For exact tridiagonal Hessian, num_examples must be >= num_parameters.")
+
+            # 1. Create Base Nesterov's Worst-Case Tridiagonal Matrix T
+            main_diag = 2.0 * np.ones(d)
+            side_diag = -1.0 * np.ones(d - 1)
+            T = np.diag(main_diag) + np.diag(side_diag, k=1) + np.diag(side_diag, k=-1)
+
+            # Calculate base eigenvalues
+            eigvals = np.linalg.eigvalsh(T)
+            l_min, l_max = eigvals[0], eigvals[-1]
+            base_kappa = l_max / l_min
+
+            # 2. Determine mu to hit the target condition number
+            if condition_number is not None:
+                if condition_number <= 1.0:
+                    raise ValueError("Target condition_number must be > 1.0.")
+                if condition_number >= base_kappa:
+                    raise ValueError(
+                        f"Requested condition number ({condition_number}) must be strictly less "
+                        f"than the base unregularized condition number ({base_kappa:.2f})."
+                    )
+
+                # Algebra trick: solve for mu to get exactly the desired condition number
+                mu = (l_max - condition_number * l_min) / (condition_number - 1.0)
+            else:
+                mu = 0.01  # Fallback to the old default
+
+            # Add the computed strong convexity shift
+            A = T + mu * np.eye(d)
+
+            # 3. Factorize A = L L^T using Cholesky
+            L_mat = np.linalg.cholesky(A)
+
+            # 4. Create X such that the empirical Hessian (1/n) X^T X = A exactly!
+            Z = rng.normal(size=(n, d))
+            Q, _ = np.linalg.qr(Z)  # Q has orthonormal columns: Q^T Q = I
+            X = np.sqrt(n) * Q @ L_mat.T
+
+            # 5. Generate targets
+            true_w = rng.normal(size=(d,))
+            y = X @ true_w
+            if noise_std > 0.0:
+                y = y + noise_std * rng.normal(size=y.shape)
+
+            analytic_L = float(np.linalg.eigvalsh(A).max())
+
+            return cls(
+                X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size,
+                kind="tridiagonal", true_w=true_w, analytic_L=analytic_L,
             )
 
         raise ValueError(f"Unknown quadratic kind: {kind}")
@@ -118,7 +156,7 @@ class QuadraticObjective(Objective):
 
     def check_smoothness_constant(self, atol: float = 1e-10, rtol: float = 1e-10) -> bool:
         if self.analytic_L is None:
-            raise ValueError("Analytic smoothness constant is available only for kind='simple'.")
+            raise ValueError("Analytic smoothness constant is available only for kind='simple' or 'tridiagonal'.")
         return np.isclose(self.smoothness_constant, self.analytic_L, atol=atol, rtol=rtol)
 
     def initial_activation(self, batch: Batch) -> np.ndarray:
@@ -126,10 +164,10 @@ class QuadraticObjective(Objective):
         return np.zeros(len(yb))
 
     def initial_stage_weights(
-        self,
-        mode: str = "zeros",
-        seed: int = 0,
-        scale: float = 1e-2,
+            self,
+            mode: str = "zeros",
+            seed: int = 0,
+            scale: float = 1e-2,
     ) -> list[np.ndarray]:
         rng = np.random.default_rng(seed)
         result: list[np.ndarray] = []
@@ -158,11 +196,11 @@ class QuadraticObjective(Objective):
         return [grad[sl].copy() for sl in self.stage_slices]
 
     def forward_stage(
-        self,
-        batch: Batch,
-        stage: int,
-        w_stage: np.ndarray,
-        activation_in: np.ndarray,
+            self,
+            batch: Batch,
+            stage: int,
+            w_stage: np.ndarray,
+            activation_in: np.ndarray,
     ) -> tuple[np.ndarray, dict]:
         Xb, _ = batch
         sl = self.stage_slices[stage]
@@ -176,9 +214,9 @@ class QuadraticObjective(Objective):
         return activation_out, cache
 
     def loss_and_output_grad(
-        self,
-        batch: Batch,
-        final_activation: np.ndarray,
+            self,
+            batch: Batch,
+            final_activation: np.ndarray,
     ) -> tuple[float, np.ndarray]:
         _, yb = batch
         residual = final_activation - yb
@@ -187,12 +225,12 @@ class QuadraticObjective(Objective):
         return loss, grad_out
 
     def backward_stage(
-        self,
-        batch: Batch,
-        stage: int,
-        w_stage: np.ndarray,
-        cache: dict,
-        grad_out: np.ndarray,
+            self,
+            batch: Batch,
+            stage: int,
+            w_stage: np.ndarray,
+            cache: dict,
+            grad_out: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         Xb, _ = batch
         sl = self.stage_slices[stage]

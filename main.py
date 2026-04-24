@@ -306,6 +306,7 @@ def main() -> None:
         batch_size=args.batch_size,
         seed=args.seed,
         noise_std=args.noise_std,
+        kind="tridiagonal",
     )
 
     init_stage_weights = objective.initial_stage_weights(mode="zeros", seed=args.seed)

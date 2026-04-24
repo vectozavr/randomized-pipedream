@@ -149,7 +149,7 @@ class PipeDreamMethod(Method):
                         batch=batch,
                         stage=stage,
                         w_stage=stashed,
-                        cache={},
+                        cache={"activation_in": state.activations[stage]},
                         grad_out=grad_out,
                     )
 

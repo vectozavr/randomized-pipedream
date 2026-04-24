@@ -15,25 +15,24 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
     if noam is None:
         noam = num_stages
 
-    f_done = [[None] * num_microbatches for _ in range(num_stages)]
-    b_done = [[None] * num_microbatches for _ in range(num_stages)]
+    # We only need to store the completion time of each microbatch to know if it's ready.
+    # -1 indicates that the microbatch has not completed yet.
+    f_done = [[-1] * num_microbatches for _ in range(num_stages)]
+    b_done = [[-1] * num_microbatches for _ in range(num_stages)]
 
-    launched = 0
     steady_state = [False] * num_stages
     next_preference = ["F"] * num_stages
     timeline: Timeline = []
 
-    # This function computes how many microbatches are currently active in
-    # the pipeline (i.e. have started forward but not finished backward).
-    def active_microbatches() -> int:
-        return sum(
-            1
-            for mb in range(num_microbatches)
-            if f_done[0][mb] is not None and b_done[0][mb] is None
-        )
+    # O(1) pointers to the next candidate microbatch for each stage
+    next_f = [0] * num_stages
+    next_b = [0] * num_stages
+
+    active_mbs = 0
+    current_time = 0
 
     # cycle until the last microbatch finishes backward on the first stage
-    while b_done[0][num_microbatches - 1] is None:
+    while b_done[0][num_microbatches - 1] == -1:
         ops_this_step = [None] * num_stages
 
         # iterate over stages to find ready forward and backward microbatches
@@ -41,90 +40,60 @@ def simulate_pipedream_1f1b(num_stages: int, num_microbatches: int, noam: int | 
             ready_f: int | None = None
             ready_b: int | None = None
 
-            # find the earliest ready FORWARD microbatch for this stage
-            for mb in range(num_microbatches):
-                if f_done[stage][mb] is not None:
-                    continue
-
+            # 1. Check if the earliest unfinished FORWARD microbatch is ready
+            mb_f = next_f[stage]
+            if mb_f < num_microbatches:
                 if stage == 0:
-                    if mb == launched and launched < num_microbatches and active_microbatches() < noam:
-                        ready_f = mb
-                    break
+                    if active_mbs < noam:
+                        ready_f = mb_f
+                else:
+                    if f_done[stage - 1][mb_f] != -1 and f_done[stage - 1][mb_f] < current_time:
+                        ready_f = mb_f
 
-                if f_done[stage - 1][mb] is not None and f_done[stage - 1][mb] < len(timeline):
-                    ready_f = mb
-                break
-
-            # find the earliest ready BACKWARD microbatch for this stage
-            for mb in range(num_microbatches):
-                if f_done[stage][mb] is None:  # backward can't start until forward is done
-                    continue
-                if f_done[stage][mb] >= len(timeline):  # forward must have started in a previous step
-                    continue
-                if b_done[stage][mb] is not None:  # already done
-                    continue
-
-                # If we are here then forward is done, it was done on a previous step, and backward is not done yet.
-
-                if stage == num_stages - 1:  # last stage can start backward as soon as forward is done
-                    ready_b = mb
-                    break
-
-                # for other stages, we also need to check that the next stage has finished backward for this microbatch
-                # and that the next stage's backward for this microbatch started in a previous step
-                # (to avoid starting backward before the next stage has even started)
-                if b_done[stage + 1][mb] is not None and b_done[stage + 1][mb] < len(timeline):
-                    ready_b = mb
-                    break
+            # 2. Check if the earliest unfinished BACKWARD microbatch is ready
+            mb_b = next_b[stage]
+            if mb_b < num_microbatches:
+                # backward can't start until forward is done on THIS stage in a previous step
+                if f_done[stage][mb_b] != -1 and f_done[stage][mb_b] < current_time:
+                    if stage == num_stages - 1:
+                        ready_b = mb_b
+                    else:
+                        if b_done[stage + 1][mb_b] != -1 and b_done[stage + 1][mb_b] < current_time:
+                            ready_b = mb_b
 
             chosen = None
 
-            if not steady_state[stage]:
-                if ready_b is not None:
-                    # on the startup stage we prefer FORWARD, but as we meet the first BACKWARD we
-                    # make BACKWARD and go to the steady mode, so then we alternate F, B, F, B...
-                    chosen = ("B", ready_b)
-                    steady_state[stage] = True
-                    next_preference[stage] = "F"
-                elif ready_f is not None:
-                    chosen = ("F", ready_f)
-            else:
-                # here we are already in a steady state, so we alternate between F and B based on the next_preference,
-                # but if the preferred one is not ready we take the other one if it's ready
-
-                pref = next_preference[stage]
-
-                if pref == "B" and ready_b is not None:
-                    # if we prefer B, and it's ready, take it and switch preference to F for the next time
-                    chosen = ("B", ready_b)
-                    next_preference[stage] = "F"
-                elif pref == "F" and ready_f is not None:
-                    # if we prefer F, and it's ready, take it and switch preference to B for the next time
-                    chosen = ("F", ready_f)
-                    next_preference[stage] = "B"
-                # in case the preferred one is not ready but the other one is ready we take the other and switch
-                # the preference to the opposite of what will be taken on this step
-                elif ready_b is not None:
-                    chosen = ("B", ready_b)
-                    next_preference[stage] = "F"
-                elif ready_f is not None:
-                    chosen = ("F", ready_f)
+            # 3. 1F1B picking logic (Simplified cleanly but functionally identical to original)
+            if ready_b is not None and (not steady_state[stage] or next_preference[stage] == "B" or ready_f is None):
+                chosen = ("B", ready_b)
+                steady_state[stage] = True
+                next_preference[stage] = "F"
+            elif ready_f is not None:
+                chosen = ("F", ready_f)
+                if steady_state[stage]:
                     next_preference[stage] = "B"
 
             ops_this_step[stage] = chosen
 
+        # 4. Update states efficiently at the end of the step
         for stage, op in enumerate(ops_this_step):
             if op is None:
                 continue
+
             kind, mb = op
             if kind == "F":
-                f_done[stage][mb] = len(timeline)
-                if stage == 0:  # only increment launched on the first stage when we actually launch a new microbatch
-                    launched += 1
+                f_done[stage][mb] = current_time
+                next_f[stage] += 1
+                if stage == 0:
+                    active_mbs += 1
             else:
-                b_done[stage][mb] = len(timeline)
+                b_done[stage][mb] = current_time
+                next_b[stage] += 1
+                if stage == 0:
+                    active_mbs -= 1
 
-        timeline.append(ops_this_step)  # append the operations of this step to the timeline
+        timeline.append(ops_this_step)
+        current_time += 1
 
     return timeline
 
@@ -144,12 +113,12 @@ def print_schedule(timeline: Timeline) -> None:
 
 
 def plot_schedule(
-    timeline: Timeline,
-    startup_boundary: int | None = None,
-    figsize: tuple[float, float] = (14.0, 4.0),
-    *,
-    reduce_text: bool = False,
-    max_xtick_labels: int = 30
+        timeline: Timeline,
+        startup_boundary: int | None = None,
+        figsize: tuple[float, float] = (14.0, 4.0),
+        *,
+        reduce_text: bool = False,
+        max_xtick_labels: int = 30
 ):
     num_steps = len(timeline)
     num_stages = len(timeline[0])

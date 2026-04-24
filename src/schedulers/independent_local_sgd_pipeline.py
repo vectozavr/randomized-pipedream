@@ -9,15 +9,21 @@ def simulate_local_sgd_1f1b(num_stages: int, num_microbatches: int, num_runs: in
     K = local_steps
     round_size = M * K
 
-    f_done = [[None] * num_microbatches for _ in range(num_stages)]
-    b_done = [[None] * num_microbatches for _ in range(num_stages)]
+    # -1 indicates that the microbatch has not completed yet.
+    f_done = [[-1] * num_microbatches for _ in range(num_stages)]
+    b_done = [[-1] * num_microbatches for _ in range(num_stages)]
 
-    launched = 0
     steady_state = [False] * num_stages
     next_preference = ["F"] * num_stages
     timeline: Timeline = []
 
-    while b_done[0][num_microbatches - 1] is None:
+    # O(1) pointers to the next candidate microbatch for each stage
+    next_f = [0] * num_stages
+    next_b = [0] * num_stages
+    current_time = 0
+
+    # cycle until the last microbatch finishes backward on the first stage
+    while b_done[0][num_microbatches - 1] == -1:
         ops_this_step = [None] * num_stages
 
         for stage in range(num_stages):
@@ -25,92 +31,72 @@ def simulate_local_sgd_1f1b(num_stages: int, num_microbatches: int, num_runs: in
             ready_b: int | None = None
 
             # 1. Find earliest ready FORWARD microbatch
-            for mb in range(num_microbatches):
-                if f_done[stage][mb] is not None:
-                    continue
+            mb_f = next_f[stage]
+            if mb_f < num_microbatches:
+                round_id = mb_f // round_size
+                mb_in_round = mb_f % round_size
 
-                round_id = mb // round_size
-                mb_in_round = mb % round_size
+                can_do_f = True
 
                 # --- DEPENDENCY A: Intra-round Local SGD ---
                 # Wait for the previous local step of THIS run to update local weights
                 if mb_in_round >= M:
-                    if b_done[stage][mb - M] is None or b_done[stage][mb - M] >= len(timeline):
-                        break
+                    prev_dep = mb_f - M
+                    if b_done[stage][prev_dep] == -1 or b_done[stage][prev_dep] >= current_time:
+                        can_do_f = False
 
                 # --- DEPENDENCY B: Inter-round GLOBAL SYNC ---
-                # If we are starting a new round, we must wait for the ENTIRE
-                # previous round to finish its backward passes on Stage 0.
-                if round_id > 0:
-                    prev_round_start = (round_id - 1) * round_size
-                    prev_round_end = round_id * round_size
+                # Because microbatches complete backwards strictly in order, we only
+                # need to check if the LAST microbatch of the previous round finished! (O(1) vs O(N))
+                if can_do_f and round_id > 0:
+                    prev_round_last_mb = round_id * round_size - 1
+                    if b_done[0][prev_round_last_mb] == -1 or b_done[0][prev_round_last_mb] >= current_time:
+                        can_do_f = False
 
-                    prev_round_synced = True
-                    for prev_mb in range(prev_round_start, prev_round_end):
-                        # Stage 0 completing B means the pipeline is fully drained for that mb
-                        if b_done[0][prev_mb] is None or b_done[0][prev_mb] >= len(timeline):
-                            prev_round_synced = False
-                            break
-
-                    if not prev_round_synced:
-                        break  # Halt forward search! The pipeline must drain and sync here.
-
-                if stage == 0:
-                    if mb == launched and launched < num_microbatches:
-                        ready_f = mb
-                    break
-
-                if f_done[stage - 1][mb] is not None and f_done[stage - 1][mb] < len(timeline):
-                    ready_f = mb
-                break
+                if can_do_f:
+                    if stage == 0:
+                        ready_f = mb_f
+                    else:
+                        if f_done[stage - 1][mb_f] != -1 and f_done[stage - 1][mb_f] < current_time:
+                            ready_f = mb_f
 
             # 2. Find earliest ready BACKWARD microbatch
-            for mb in range(num_microbatches):
-                if f_done[stage][mb] is None or f_done[stage][mb] >= len(timeline) or b_done[stage][mb] is not None:
-                    continue
-                if stage == num_stages - 1:
-                    ready_b = mb
-                    break
-                if b_done[stage + 1][mb] is not None and b_done[stage + 1][mb] < len(timeline):
-                    ready_b = mb
-                    break
+            mb_b = next_b[stage]
+            if mb_b < num_microbatches:
+                # backward can't start until forward is done on THIS stage in a previous step
+                if f_done[stage][mb_b] != -1 and f_done[stage][mb_b] < current_time:
+                    if stage == num_stages - 1:
+                        ready_b = mb_b
+                    else:
+                        if b_done[stage + 1][mb_b] != -1 and b_done[stage + 1][mb_b] < current_time:
+                            ready_b = mb_b
 
             # 3. 1F1B Selection Logic
             chosen = None
-            if not steady_state[stage]:
-                if ready_b is not None:
-                    chosen = ("B", ready_b)
-                    steady_state[stage] = True
-                    next_preference[stage] = "F"
-                elif ready_f is not None:
-                    chosen = ("F", ready_f)
-            else:
-                pref = next_preference[stage]
-                if pref == "B" and ready_b is not None:
-                    chosen = ("B", ready_b)
-                    next_preference[stage] = "F"
-                elif pref == "F" and ready_f is not None:
-                    chosen = ("F", ready_f)
-                    next_preference[stage] = "B"
-                elif ready_b is not None:
-                    chosen = ("B", ready_b)
-                    next_preference[stage] = "F"
-                elif ready_f is not None:
-                    chosen = ("F", ready_f)
+            if ready_b is not None and (not steady_state[stage] or next_preference[stage] == "B" or ready_f is None):
+                chosen = ("B", ready_b)
+                steady_state[stage] = True
+                next_preference[stage] = "F"
+            elif ready_f is not None:
+                chosen = ("F", ready_f)
+                if steady_state[stage]:
                     next_preference[stage] = "B"
 
             ops_this_step[stage] = chosen
 
+        # 4. Update states efficiently at the end of the step
         for stage, op in enumerate(ops_this_step):
             if op is not None:
                 kind, mb = op
                 if kind == "F":
-                    f_done[stage][mb] = len(timeline)
-                    if stage == 0: launched += 1
+                    f_done[stage][mb] = current_time
+                    next_f[stage] += 1
                 else:
-                    b_done[stage][mb] = len(timeline)
+                    b_done[stage][mb] = current_time
+                    next_b[stage] += 1
 
         timeline.append(ops_this_step)
+        current_time += 1
 
     return timeline
 
