@@ -186,6 +186,12 @@ def sweep_learning_rates(
             seeds=seeds,
         )
         agg = aggregate_block_curves(traces, k_budget=k_budget, tail_frac=tail_frac)
+        print(
+            f"Finished {method_name} lr={lr:.6e} | "
+            f"final loss={agg['final_mean']:.6e} +/- {agg['final_std']:.2e} | "
+            f"tail loss={agg['tail_mean']:.6e} +/- {agg['tail_std']:.2e}",
+            flush=True,
+        )
         results[float(lr)] = {
             "traces": traces,
             "mean_curve": agg["mean"],

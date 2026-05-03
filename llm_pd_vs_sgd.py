@@ -240,6 +240,12 @@ def sweep_learning_rates(
             seeds=seeds,
         )
         agg = aggregate_time_curves(traces, tail_frac=tail_frac)
+        print(
+            f"Finished {method_name} lr={lr:.6e} | "
+            f"final loss={agg['final_mean']:.6e} +/- {agg['final_std']:.2e} | "
+            f"tail loss={agg['tail_mean']:.6e} +/- {agg['tail_std']:.2e}",
+            flush=True,
+        )
         results[float(lr)] = {
             "traces": traces,
             "mean_curve": agg["mean"],
@@ -336,6 +342,7 @@ def select_stable_learning_rate(
 
 
 def plot_time_curves(curves: dict[str, np.ndarray], path: Path, *, log_scale: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8.5, 4.8))
     eps = 1e-16
     for name, curve in curves.items():
@@ -356,6 +363,7 @@ def plot_time_curves(curves: dict[str, np.ndarray], path: Path, *, log_scale: bo
 
 
 def plot_lr_sweep_curves(sweep_result, path: Path, *, log_scale: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(9, 5))
     eps = 1e-16
     for lr, info in sorted(sweep_result["results"].items(), key=lambda item: item[0]):
@@ -380,6 +388,7 @@ def plot_lr_sweep_curves(sweep_result, path: Path, *, log_scale: bool) -> None:
 
 
 def plot_lr_sweep_summary(sweep_result, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     lrs = np.array(sorted(sweep_result["results"].keys()))
     means = np.array([sweep_result["results"][lr]["final_mean"] for lr in lrs])
     stds = np.array([sweep_result["results"][lr]["final_std"] for lr in lrs])
@@ -398,6 +407,7 @@ def plot_lr_sweep_summary(sweep_result, path: Path) -> None:
 
 
 def save_trace_curves(path: Path, traces: dict[str, object], curves: dict[str, np.ndarray]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     arrays = {}
     for name, trace in traces.items():
         key = name.lower().replace(" ", "_").replace("/", "_")
@@ -405,6 +415,25 @@ def save_trace_curves(path: Path, traces: dict[str, object], curves: dict[str, n
         arrays[f"{key}_forward_loss"] = trace.forward_loss_trace
         arrays[f"{key}_forward_loss_time"] = trace.forward_loss_time_trace
     np.savez(path, **arrays)
+
+
+def save_sweep_summary(path: Path, sweeps: dict[str, dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary = {}
+    for name, sweep in sweeps.items():
+        summary[name] = {
+            "best_lr": float(sweep["best_lr"]),
+            "results": {
+                f"{lr:.16e}": {
+                    "final_mean": float(info["final_mean"]),
+                    "final_std": float(info["final_std"]),
+                    "tail_mean": float(info["tail_mean"]),
+                    "tail_std": float(info["tail_std"]),
+                }
+                for lr, info in sweep["results"].items()
+            },
+        }
+    path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
 def main() -> None:
@@ -494,11 +523,15 @@ def main() -> None:
     print(f"tune stepsizes           = {args.tune_stepsizes}")
     print("=" * 80)
 
+    args.save_dir.mkdir(parents=True, exist_ok=True)
+
     fig_pd_sched, _ = plot_schedule(pd_timeline, startup_boundary=None, reduce_text=True, max_xtick_labels=24)
+    (args.save_dir / "pipedream_schedule.png").parent.mkdir(parents=True, exist_ok=True)
     fig_pd_sched.savefig(args.save_dir / "pipedream_schedule.png", dpi=200, bbox_inches="tight")
     plt.close(fig_pd_sched)
 
     fig_local_sched, _ = plot_schedule(local_timeline, startup_boundary=None, reduce_text=True, max_xtick_labels=24)
+    (args.save_dir / "local_sgd_schedule.png").parent.mkdir(parents=True, exist_ok=True)
     fig_local_sched.savefig(args.save_dir / "local_sgd_schedule.png", dpi=200, bbox_inches="tight")
     plt.close(fig_local_sched)
 
@@ -549,6 +582,11 @@ def main() -> None:
         local_lr, local_lr_table = select_stable_learning_rate(
             local_sweep,
             tail_frac=args.stable_tail_frac,
+        )
+
+        save_sweep_summary(
+            args.save_dir / "stepsize_sweeps_summary.json",
+            {"PipeDream": pd_sweep, "LocalSGD": local_sweep},
         )
 
         plot_lr_sweep_curves(pd_sweep, args.save_dir / "pd_lr_sweep_log.png", log_scale=True)
@@ -620,6 +658,7 @@ def main() -> None:
         },
         "tuning": tuning_summary,
     }
+    (args.save_dir / "summary.json").parent.mkdir(parents=True, exist_ok=True)
     (args.save_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print("\nFINAL FORWARD LOSSES")
