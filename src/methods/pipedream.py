@@ -179,9 +179,10 @@ class PipeDreamMethod(Method):
 
                     # We measure the new value for the objective after each block update (backward pass on any stage),
                     # to track the block-update curve.
-                    # We also track the objective after the backward pass on stage 0 for each microbatch,
                     current_obj = objective.full_objective(stage_weights)
                     block_update_objective.append(current_obj)  # update after each backward update
+
+                    # We also track the objective after the backward pass on stage 0 for each microbatch
                     if stage == 0:
                         completion_objective.append(current_obj)  # update after backward pass on stage 0.
 

@@ -19,10 +19,13 @@ class QuadraticObjective(Objective):
     kind: Literal["random", "simple", "tridiagonal"] = "random"
     true_w: np.ndarray | None = None
     analytic_L: float | None = None
+    gradient_noise_std: float = 0.0
+    seed: int = 0
 
     def __post_init__(self) -> None:
         self._stage_slices = make_stage_slices(self.X.shape[1], self.num_pipeline_stages)
         self._batches = build_batches(self.X, self.y, self.batch_size)
+        self._rng = np.random.default_rng(self.seed)
 
     @classmethod
     def synthetic(
@@ -32,7 +35,8 @@ class QuadraticObjective(Objective):
             num_stages: int,
             batch_size: int,
             seed: int = 0,
-            noise_std: float = 0.0,
+            noise_std: float = 0.0, # labeling noise
+            gradient_noise_std: float = 0.0,  # gradient noise (Stochastic Oracle)
             kind: Literal["random", "simple", "tridiagonal"] = "random",
             condition_number: float | None = None,
     ) -> "QuadraticObjective":
@@ -48,6 +52,7 @@ class QuadraticObjective(Objective):
             return cls(
                 X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size,
                 kind="random", true_w=true_w, analytic_L=None,
+                gradient_noise_std=gradient_noise_std, seed=seed,
             )
 
         if kind == "simple":
@@ -69,6 +74,7 @@ class QuadraticObjective(Objective):
             return cls(
                 X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size,
                 kind="simple", true_w=true_w, analytic_L=analytic_L,
+                gradient_noise_std=gradient_noise_std, seed=seed,
             )
 
         if kind == "tridiagonal":
@@ -123,6 +129,7 @@ class QuadraticObjective(Objective):
             return cls(
                 X=X, y=y, num_pipeline_stages=num_stages, batch_size=batch_size,
                 kind="tridiagonal", true_w=true_w, analytic_L=analytic_L,
+                gradient_noise_std=gradient_noise_std, seed=seed,
             )
 
         raise ValueError(f"Unknown quadratic kind: {kind}")
@@ -235,5 +242,9 @@ class QuadraticObjective(Objective):
         Xb, _ = batch
         sl = self.stage_slices[stage]
         grad_w = Xb[:, sl].T @ grad_out
+
+        if self.gradient_noise_std > 0.0:
+            grad_w += self._rng.normal(scale=self.gradient_noise_std, size=grad_w.shape)
+
         grad_in = grad_out.copy()
         return grad_w, grad_in

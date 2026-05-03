@@ -25,10 +25,13 @@ class LogisticRegressionObjective(Objective):
     batch_size: int
     l2_reg: float = 0.0
     true_w: np.ndarray | None = None
+    gradient_noise_std: float = 0.0
+    seed: int = 0
 
     def __post_init__(self) -> None:
         self._stage_slices = make_stage_slices(self.X.shape[1], self.num_pipeline_stages)
         self._batches = build_batches(self.X, self.y, self.batch_size)
+        self._rng = np.random.default_rng(self.seed)
 
     @classmethod
     def synthetic(
@@ -39,6 +42,7 @@ class LogisticRegressionObjective(Objective):
             batch_size: int,
             seed: int = 0,
             l2_reg: float = 0.0,
+            gradient_noise_std: float = 0.0,
     ) -> "LogisticRegressionObjective":
         rng = np.random.default_rng(seed)
 
@@ -60,6 +64,8 @@ class LogisticRegressionObjective(Objective):
             batch_size=batch_size,
             l2_reg=l2_reg,
             true_w=true_w,
+            gradient_noise_std=gradient_noise_std,
+            seed=seed,
         )
 
     @property
@@ -180,6 +186,9 @@ class LogisticRegressionObjective(Objective):
 
         # gradient w.r.t weights for this stage, plus L2 regularization term
         grad_w = Xb[:, sl].T @ grad_out + self.l2_reg * w_stage
+
+        if self.gradient_noise_std > 0.0:
+            grad_w += self._rng.normal(scale=self.gradient_noise_std, size=grad_w.shape)
 
         # gradient to pass to the previous stage is just grad_out
         # (since derivative of addition is 1)
