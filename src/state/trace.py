@@ -21,6 +21,8 @@ class SimulationTrace:
     sampled_delays: np.ndarray | None = None
     stale_distance_trace: np.ndarray | None = None
     grad_norm_trace: np.ndarray | None = None
+    forward_loss_trace: np.ndarray | None = None
+    forward_loss_time_trace: np.ndarray | None = None
 
     full_grad_norm_sq_trace: np.ndarray | None = None
     avg_full_grad_norm_sq_trace: np.ndarray | None = None
@@ -46,6 +48,8 @@ class SimulationTrace:
             "sampled_delays": self.sampled_delays,
             "stale_distance_trace": self.stale_distance_trace,
             "grad_norm_trace": self.grad_norm_trace,
+            "forward_loss_trace": self.forward_loss_trace,
+            "forward_loss_time_trace": self.forward_loss_time_trace,
 
             "full_grad_norm_sq_trace": self.full_grad_norm_sq_trace,
             "avg_full_grad_norm_sq_trace": self.avg_full_grad_norm_sq_trace,

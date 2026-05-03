@@ -19,6 +19,8 @@ class PipeDreamMethod(Method):
     learning_rate: float
     training_batch_indices: list[int]
     init_stage_weights: list[np.ndarray] | None = None
+    log_full_objective: bool = True
+    log_forward_loss: bool = False
     name: str = "PipeDream"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -54,7 +56,12 @@ class PipeDreamMethod(Method):
         backward_versions = -np.ones((num_microbatches, num_stages), dtype=int)
         backward_staleness = -np.ones((num_microbatches, num_stages), dtype=int)
 
-        objective_trace = [objective.full_objective(stage_weights)]  # Track objective at the end of each time step (after all ops in that step).
+        latest_forward_loss = np.nan
+        forward_loss_trace: list[float] = []
+        forward_loss_time_trace: list[int] = []
+
+        initial_obj = objective.full_objective(stage_weights) if self.log_full_objective else latest_forward_loss
+        objective_trace = [initial_obj]  # Track objective/loss at the end of each time step.
         block_update_objective: list[float] = []  # Track objective after each block update (backward pass on stage 0).
         stage_version_history = [versions.snapshot()]  # Track version history for debugging and analysis.
         time_completed = [0]
@@ -125,6 +132,10 @@ class PipeDreamMethod(Method):
                         loss, grad_out = objective.loss_and_output_grad(batch, activation_out)
                         state.loss_on_forward = loss
                         state.grad_to_left = grad_out
+                        if self.log_forward_loss:
+                            latest_forward_loss = float(loss)
+                            forward_loss_trace.append(latest_forward_loss)
+                            forward_loss_time_trace.append(t)
 
                 elif kind == "B":  # Backward pass on stage `stage` for microbatch `mb`.
 
@@ -179,7 +190,11 @@ class PipeDreamMethod(Method):
 
                     # We measure the new value for the objective after each block update (backward pass on any stage),
                     # to track the block-update curve.
-                    current_obj = objective.full_objective(stage_weights)
+                    current_obj = (
+                        objective.full_objective(stage_weights)
+                        if self.log_full_objective
+                        else latest_forward_loss
+                    )
                     block_update_objective.append(current_obj)  # update after each backward update
 
                     # We also track the objective after the backward pass on stage 0 for each microbatch
@@ -197,7 +212,10 @@ class PipeDreamMethod(Method):
             # This is the loss history after each time step, which includes multiple forward and backward passes.
             # We expect to see a decrease in the objective over time,
             # but it may be noisy due to the asynchronous updates and staleness.
-            objective_trace.append(objective.full_objective(stage_weights))
+            if self.log_full_objective:
+                objective_trace.append(objective.full_objective(stage_weights))
+            else:
+                objective_trace.append(latest_forward_loss)
 
             # We also track how many microbatches have completed (i.e. finished their backward pass on stage 0)
             # at the end of each time step,
@@ -230,6 +248,8 @@ class PipeDreamMethod(Method):
             backward_staleness=backward_staleness,
 
             grad_norm_trace=np.array(grad_norm_trace),
+            forward_loss_trace=np.array(forward_loss_trace),
+            forward_loss_time_trace=np.array(forward_loss_time_trace),
             full_grad_norm_sq_trace=np.array(full_grad_norm_sq_trace),
             avg_full_grad_norm_sq_trace=np.array(avg_full_grad_norm_sq_trace),
 

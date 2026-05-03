@@ -18,6 +18,8 @@ class LocalMinibatchSGD1F1BMethod(Method):
     num_runs: int = 1  # M
     local_steps: int = 1  # K
     init_stage_weights: list[np.ndarray] | None = None
+    log_full_objective: bool = True
+    log_forward_loss: bool = False
     name: str = "LocalSGD-1F1B"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -60,7 +62,12 @@ class LocalMinibatchSGD1F1BMethod(Method):
         backward_versions = -np.ones((num_microbatches, num_stages), dtype=int)
         backward_staleness = -np.ones((num_microbatches, num_stages), dtype=int)
 
-        objective_trace = [objective.full_objective(base_weights)]
+        latest_forward_loss = np.nan
+        forward_loss_trace: list[float] = []
+        forward_loss_time_trace: list[int] = []
+
+        initial_obj = objective.full_objective(base_weights) if self.log_full_objective else latest_forward_loss
+        objective_trace = [initial_obj]
         block_update_objective: list[float] = []
         time_completed = [0]
         completion_objective: list[float] = []
@@ -113,6 +120,10 @@ class LocalMinibatchSGD1F1BMethod(Method):
                         loss, grad_out = objective.loss_and_output_grad(batch, activation_out)
                         state.loss_on_forward = loss
                         state.grad_to_left = grad_out
+                        if self.log_forward_loss:
+                            latest_forward_loss = float(loss)
+                            forward_loss_trace.append(latest_forward_loss)
+                            forward_loss_time_trace.append(t)
 
                 elif kind == "B":
                     state = micro[mb]
@@ -144,7 +155,11 @@ class LocalMinibatchSGD1F1BMethod(Method):
                         state.grad_to_left = None
 
                     current_avg_weights = get_averaged_weights()
-                    current_obj = objective.full_objective(current_avg_weights)
+                    current_obj = (
+                        objective.full_objective(current_avg_weights)
+                        if self.log_full_objective
+                        else latest_forward_loss
+                    )
                     block_update_objective.append(current_obj)
                     if stage == 0: completion_objective.append(current_obj)
 
@@ -184,7 +199,10 @@ class LocalMinibatchSGD1F1BMethod(Method):
             # ==========================================================
 
             current_avg_weights = get_averaged_weights()
-            objective_trace.append(objective.full_objective(current_avg_weights))
+            if self.log_full_objective:
+                objective_trace.append(objective.full_objective(current_avg_weights))
+            else:
+                objective_trace.append(latest_forward_loss)
             time_completed.append(sum(1 for mb_idx in range(num_microbatches) if backward_versions[mb_idx, 0] >= 0))
             history.append(clone_stage_weights(current_avg_weights))
 
@@ -209,6 +227,8 @@ class LocalMinibatchSGD1F1BMethod(Method):
             backward_versions=backward_versions,
             backward_staleness=backward_staleness,
             grad_norm_trace=np.array(grad_norm_trace),
+            forward_loss_trace=np.array(forward_loss_trace),
+            forward_loss_time_trace=np.array(forward_loss_time_trace),
             full_grad_norm_sq_trace=np.array(full_grad_norm_sq_trace),
             avg_full_grad_norm_sq_trace=np.array(avg_full_grad_norm_sq_trace),
             metadata=metadata,
