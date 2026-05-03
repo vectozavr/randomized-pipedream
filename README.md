@@ -1,4 +1,11 @@
-# PipeDream / GPD research project
+python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("torch CUDA build:", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+print("device count:", torch.cuda.device_count())
+print(torch.cuda.get_device_name(0))
+PY# PipeDream / GPD research project
 
 This project packages the exploratory notebook code into a small research codebase.
 

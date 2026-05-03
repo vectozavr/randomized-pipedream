@@ -59,10 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pd-lr", type=float, default=1e-3)
     parser.add_argument("--gpd-lr", type=float, default=1e-3)
     parser.add_argument("--gpd-delta", type=int, default=None)
+
     parser.add_argument("--gpd-seed", type=int, default=123)
-    parser.add_argument("--gpd-stage-sampling", choices=["uniform", "pipedream"], default="uniform")
-    parser.add_argument("--gpd-batch-sampling", choices=["uniform", "cyclic", "pipedream"], default="uniform")
-    parser.add_argument("--gpd-stale-sampling", choices=["uniform", "pipedream"], default="uniform")
     parser.add_argument("--shuffle-batches", action="store_true")
 
     parser.add_argument("--tune-stepsizes", action="store_true")
@@ -126,8 +124,6 @@ def make_gpd_method(
     k_budget: int,
     delta: int,
     seed: int,
-    args: argparse.Namespace,
-    timeline,
     training_batch_indices: list[int],
     init_stage_weights: list[np.ndarray],
     name: str,
@@ -137,10 +133,6 @@ def make_gpd_method(
         learning_rate=lr,
         delta=delta,
         seed=seed,
-        stage_sampling=args.gpd_stage_sampling,
-        batch_sampling=args.gpd_batch_sampling,
-        stale_sampling=args.gpd_stale_sampling,
-        timeline=timeline,
         training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
         name=name,
@@ -440,8 +432,6 @@ def main() -> None:
                 k_budget=k_budget,
                 delta=gpd_delta,
                 seed=seed,
-                args=args,
-                timeline=timeline,
                 training_batch_indices=training_batch_indices,
                 init_stage_weights=init_stage_weights,
                 name=f"GPD lr={lr:.6e}",
@@ -489,8 +479,6 @@ def main() -> None:
             k_budget=k_budget,
             delta=gpd_delta,
             seed=args.gpd_seed,
-            args=args,
-            timeline=timeline,
             training_batch_indices=training_batch_indices,
             init_stage_weights=init_stage_weights,
             name=f"GPD delta={gpd_delta} lr={gpd_lr:.1e}",
