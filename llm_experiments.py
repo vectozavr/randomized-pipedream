@@ -65,8 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--tune-stepsizes", action="store_true")
     parser.add_argument("--tuning-seeds", type=str, default="0")
-    parser.add_argument("--pd-lr-grid", type=str, default="1e-4,3e-4,1e-3,3e-3")
-    parser.add_argument("--gpd-lr-grid", type=str, default="1e-4,3e-4,1e-3,3e-3")
+    parser.add_argument("--pd-lr-grid", type=str, default="pow2:-5:5")
+    parser.add_argument("--gpd-lr-grid", type=str, default="pow2:-5:5")
     parser.add_argument("--stable-tail-frac", type=float, default=0.2)
 
     return parser
