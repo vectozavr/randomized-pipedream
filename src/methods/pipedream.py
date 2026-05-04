@@ -14,6 +14,7 @@ from src.utils.partitioning import (
     clone_stage_weights,
     clone_weight,
     combine_stage_weights,
+    is_torch_tensor,
     stage_weight_norm,
     sum_squared_stage_weights,
 )
@@ -140,6 +141,7 @@ class PipeDreamMethod(Method):
                         loss, grad_out = objective.loss_and_output_grad(batch, activation_out)
                         state.loss_on_forward = loss
                         state.grad_to_left = grad_out
+                        state.activations[num_stages] = None
                         if self.log_forward_loss:
                             latest_forward_loss = float(loss)
                             forward_loss_trace.append(latest_forward_loss)
@@ -187,15 +189,25 @@ class PipeDreamMethod(Method):
                     # Update the weights for this stage using the computed gradient.
                     # In a real implementation, this would be done asynchronously and might involve
                     # locking or atomic updates, but here we do it synchronously for simplicity.
-                    stage_weights[stage] = stage_weights[stage] - self.learning_rate * grad_w
+                    if is_torch_tensor(stage_weights[stage]):
+                        stage_weights[stage].add_(grad_w, alpha=-self.learning_rate)
+                    else:
+                        stage_weights[stage] = stage_weights[stage] - self.learning_rate * grad_w
                     versions.increment(stage)
                     history_len += 1
+
+                    state.stashed_weights[stage] = None
+                    state.stashed_versions[stage] = None
+                    state.activations[stage] = None
+                    if stage + 1 <= num_stages:
+                        state.activations[stage + 1] = None
 
                     # After the backward pass, the gradient to send to the previous stage becomes available.
                     if stage > 0:
                         state.grad_to_left = grad_in
                     else:
                         state.grad_to_left = None
+                        del micro[mb]
 
                     # We measure the new value for the objective after each block update (backward pass on any stage),
                     # to track the block-update curve.

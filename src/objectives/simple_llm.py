@@ -212,7 +212,7 @@ class SimpleLLMObjective(Objective):
     # ---------------------------------------------------------------------
     def loss_and_output_grad(self, batch: Batch, final_activation: torch.Tensor) -> tuple[float, torch.Tensor]:
         _, yb = batch
-        logits = final_activation.detach().clone().requires_grad_(True)
+        logits = final_activation.detach().requires_grad_(True)
         targets = yb
 
         loss = F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1))
@@ -247,6 +247,7 @@ class SimpleLLMObjective(Objective):
         out_tensor.backward(grad_out)
 
         grad_w = get_module_grads(module)
+        module.zero_grad(set_to_none=True)
 
         if stage == 0:
             grad_in = torch.zeros_like(grad_out)

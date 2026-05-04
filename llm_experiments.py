@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 from pathlib import Path
@@ -142,8 +143,25 @@ def make_gpd_method(
     )
 
 
+def release_cuda_cache() -> None:
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
 def run_trials(objective, method_factory: Callable[[int], object], seeds: list[int]):
-    return [method_factory(seed).run(objective) for seed in seeds]
+    traces = []
+    for seed in seeds:
+        method = method_factory(seed)
+        traces.append(method.run(objective))
+        del method
+        release_cuda_cache()
+    return traces
 
 
 def aggregate_block_curves(traces, k_budget: int, tail_frac: float = 0.2) -> dict[str, object]:
