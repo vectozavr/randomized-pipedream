@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tuning-seeds", type=str, default="0")
     parser.add_argument("--pd-lr-grid", type=str, default="pow2:-4:2")
     parser.add_argument("--local-sgd-lr-grid", type=str, default="pow2:-4:2")
+    parser.add_argument(
+        "--lr-selection",
+        choices=["best-final", "stable"],
+        default="best-final",
+        help="Choose the swept learning rate by final loss or by the conservative stable selector.",
+    )
     parser.add_argument("--stable-tail-frac", type=float, default=0.2)
     parser.add_argument("--no-progress", action="store_true")
 
@@ -611,14 +617,21 @@ def main() -> None:
             tail_frac=args.stable_tail_frac,
         )
 
-        pd_lr, pd_lr_table = select_stable_learning_rate(
+        stable_pd_lr, pd_lr_table = select_stable_learning_rate(
             pd_sweep,
             tail_frac=args.stable_tail_frac,
         )
-        local_lr, local_lr_table = select_stable_learning_rate(
+        stable_local_lr, local_lr_table = select_stable_learning_rate(
             local_sweep,
             tail_frac=args.stable_tail_frac,
         )
+
+        if args.lr_selection == "best-final":
+            pd_lr = float(pd_sweep["best_lr"])
+            local_lr = float(local_sweep["best_lr"])
+        else:
+            pd_lr = stable_pd_lr
+            local_lr = stable_local_lr
 
         save_sweep_summary(
             args.save_dir / "stepsize_sweeps_summary.json",
@@ -632,12 +645,18 @@ def main() -> None:
 
         tuning_summary = {
             "pd_final_point_best_lr": float(pd_sweep["best_lr"]),
-            "pd_stable_lr": float(pd_lr),
+            "pd_stable_lr": float(stable_pd_lr),
+            "pd_selected_lr": float(pd_lr),
             "pd_lr_table": pd_lr_table,
             "local_sgd_final_point_best_lr": float(local_sweep["best_lr"]),
-            "local_sgd_stable_lr": float(local_lr),
+            "local_sgd_stable_lr": float(stable_local_lr),
+            "local_sgd_selected_lr": float(local_lr),
             "local_sgd_lr_table": local_lr_table,
+            "selection_policy": args.lr_selection,
         }
+        print(f"LR selection policy  = {args.lr_selection}")
+        print(f"PipeDream best-final = {float(pd_sweep['best_lr']):.6e}, stable = {stable_pd_lr:.6e}")
+        print(f"LocalSGD best-final  = {float(local_sweep['best_lr']):.6e}, stable = {stable_local_lr:.6e}")
         print(f"Selected PipeDream lr = {pd_lr:.6e}")
         print(f"Selected LocalSGD lr  = {local_lr:.6e}")
 
