@@ -114,6 +114,8 @@ def make_pd_method(
         learning_rate=lr,
         training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
+        log_grad_norms=False,
+        store_final_weight=False,
         name=name,
     )
 
@@ -135,6 +137,7 @@ def make_gpd_method(
         seed=seed,
         training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
+        store_final_weight=False,
         name=name,
     )
 

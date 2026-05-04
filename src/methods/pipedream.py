@@ -10,7 +10,13 @@ from src.state.microbatch import MicrobatchRuntime
 from src.state.timeline import Timeline, num_microbatches_from_timeline
 from src.state.trace import SimulationTrace
 from src.state.versions import VersionTracker
-from src.utils.partitioning import clone_stage_weights, combine_stage_weights
+from src.utils.partitioning import (
+    clone_stage_weights,
+    clone_weight,
+    combine_stage_weights,
+    stage_weight_norm,
+    sum_squared_stage_weights,
+)
 
 
 @dataclass
@@ -21,6 +27,8 @@ class PipeDreamMethod(Method):
     init_stage_weights: list[np.ndarray] | None = None
     log_full_objective: bool = True
     log_forward_loss: bool = False
+    log_grad_norms: bool = True
+    store_final_weight: bool = True
     name: str = "PipeDream"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -39,10 +47,10 @@ class PipeDreamMethod(Method):
 
         def compute_full_grad_norm_sq(current_stage_weights: list[np.ndarray]) -> float:
             full_grad = objective.full_gradient(current_stage_weights)
-            return float(sum(np.sum(g ** 2) for g in full_grad))
+            return sum_squared_stage_weights(full_grad)
 
         forward_history_indices = -np.ones((num_microbatches, num_stages), dtype=int)
-        history = [clone_stage_weights(stage_weights)]
+        history_len = 1
 
         # Track versions of weights for staleness calculation and debugging.
         # In a real implementation, we would only need to track the version of the weights at the time
@@ -68,9 +76,9 @@ class PipeDreamMethod(Method):
         completion_objective: list[float] = []
 
 
-        initial_full_grad_norm_sq = compute_full_grad_norm_sq(stage_weights)
-        full_grad_norm_sq_trace = [initial_full_grad_norm_sq]
-        avg_full_grad_norm_sq_trace = [initial_full_grad_norm_sq]
+        initial_full_grad_norm_sq = compute_full_grad_norm_sq(stage_weights) if self.log_grad_norms else np.nan
+        full_grad_norm_sq_trace = [initial_full_grad_norm_sq] if self.log_grad_norms else []
+        avg_full_grad_norm_sq_trace = [initial_full_grad_norm_sq] if self.log_grad_norms else []
         cumulative_full_grad_norm_sq = initial_full_grad_norm_sq
         grad_norm_trace: list[float] = []
 
@@ -102,11 +110,11 @@ class PipeDreamMethod(Method):
                     state = micro[mb]
                     batch = batches[state.batch_id]
 
-                    current_history_index = len(history) - 1
+                    current_history_index = history_len - 1
                     forward_history_indices[mb, stage] = current_history_index
 
                     # We take the currently available weights (last version) and perform weights stashing.
-                    w_used = stage_weights[stage].copy()
+                    w_used = clone_weight(stage_weights[stage])
                     state.stashed_weights[stage] = w_used
                     state.stashed_versions[stage] = int(versions.versions[stage])
                     forward_versions[mb, stage] = int(versions.versions[stage])
@@ -164,7 +172,8 @@ class PipeDreamMethod(Method):
                         grad_out=grad_out,
                     )
 
-                    grad_norm_trace.append(float(np.linalg.norm(grad_w)))
+                    if self.log_grad_norms:
+                        grad_norm_trace.append(stage_weight_norm(grad_w))
 
                     stale_version = state.stashed_versions[stage]
                     if stale_version is None:
@@ -180,7 +189,7 @@ class PipeDreamMethod(Method):
                     # locking or atomic updates, but here we do it synchronously for simplicity.
                     stage_weights[stage] = stage_weights[stage] - self.learning_rate * grad_w
                     versions.increment(stage)
-                    history.append(clone_stage_weights(stage_weights))
+                    history_len += 1
 
                     # After the backward pass, the gradient to send to the previous stage becomes available.
                     if stage > 0:
@@ -201,10 +210,11 @@ class PipeDreamMethod(Method):
                     if stage == 0:
                         completion_objective.append(current_obj)  # update after backward pass on stage 0.
 
-                    full_grad_norm_sq_now = compute_full_grad_norm_sq(stage_weights)
-                    full_grad_norm_sq_trace.append(full_grad_norm_sq_now)
-                    cumulative_full_grad_norm_sq += full_grad_norm_sq_now
-                    avg_full_grad_norm_sq_trace.append(cumulative_full_grad_norm_sq / len(full_grad_norm_sq_trace))
+                    if self.log_grad_norms:
+                        full_grad_norm_sq_now = compute_full_grad_norm_sq(stage_weights)
+                        full_grad_norm_sq_trace.append(full_grad_norm_sq_now)
+                        cumulative_full_grad_norm_sq += full_grad_norm_sq_now
+                        avg_full_grad_norm_sq_trace.append(cumulative_full_grad_norm_sq / len(full_grad_norm_sq_trace))
 
                 else:
                     raise ValueError(f"Unknown op kind: {kind}")
@@ -234,9 +244,10 @@ class PipeDreamMethod(Method):
             "time_completed": np.array(time_completed),
             "completion_objective": np.array(completion_objective),
             "training_batch_indices": np.array(self.training_batch_indices[:num_microbatches]),
-            "final_weight": combine_stage_weights(stage_weights),
             "forward_history_indices": forward_history_indices,
         }
+        if self.store_final_weight:
+            metadata["final_weight"] = combine_stage_weights(stage_weights)
 
         return SimulationTrace(
             method_name=self.name,

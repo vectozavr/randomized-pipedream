@@ -12,37 +12,36 @@ from src.utils.batching import Batch
 
 
 # =========================================================================
-# HELPER FUNCTIONS: NumPy <-> PyTorch Bridge
+# HELPER FUNCTIONS: flat PyTorch tensor <-> module parameters
 # =========================================================================
-def set_module_weights(module: nn.Module, flat_weights: np.ndarray) -> None:
-    """Loads a flat numpy array into a PyTorch module's parameters on the correct device."""
+def set_module_weights(module: nn.Module, flat_weights: torch.Tensor) -> None:
+    """Loads a flat torch tensor into a PyTorch module's parameters without leaving the device."""
     offset = 0
-    # Auto-detect which device this module is on
     device = next(module.parameters()).device
+    flat_weights = flat_weights.to(device=device, dtype=next(module.parameters()).dtype, non_blocking=True)
     with torch.no_grad():
         for param in module.parameters():
             numel = param.numel()
-            # Push the numpy data to the same device as the module
-            param_data = torch.from_numpy(flat_weights[offset: offset + numel]).to(device).view_as(param)
+            param_data = flat_weights[offset: offset + numel].view_as(param)
             param.copy_(param_data)
             offset += numel
 
 
-def get_module_weights(module: nn.Module) -> np.ndarray:
-    """Extracts a PyTorch module's parameters into a flat numpy array on CPU."""
+def get_module_weights(module: nn.Module) -> torch.Tensor:
+    """Extracts module parameters as one flat tensor on the module device."""
     with torch.no_grad():
-        return np.concatenate([p.cpu().numpy().flatten() for p in module.parameters()])
+        return torch.cat([p.detach().reshape(-1).clone() for p in module.parameters()])
 
 
-def get_module_grads(module: nn.Module) -> np.ndarray:
-    """Extracts a PyTorch module's gradients into a flat numpy array on CPU."""
+def get_module_grads(module: nn.Module) -> torch.Tensor:
+    """Extracts module gradients as one flat tensor on the module device."""
     grads = []
     for p in module.parameters():
         if p.grad is not None:
-            grads.append(p.grad.cpu().numpy().flatten())
+            grads.append(p.grad.detach().reshape(-1).clone())
         else:
-            grads.append(np.zeros(p.numel(), dtype=np.float32))
-    return np.concatenate(grads)
+            grads.append(torch.zeros(p.numel(), dtype=p.dtype, device=p.device))
+    return torch.cat(grads)
 
 
 # =========================================================================
@@ -118,11 +117,12 @@ class SimpleLLMObjective(Objective):
         chars = sorted(list(set(text_data)))
         self.vocab_size = len(chars)
         self.stoi = {ch: i for i, ch in enumerate(chars)}
-        self.data = np.array([self.stoi[ch] for ch in text_data], dtype=np.int64)
+        data = torch.tensor([self.stoi[ch] for ch in text_data], dtype=torch.long, device=self.device)
+        self.data = data
 
         # Build batches (X, y)
         self._batches = []
-        num_batches = (len(self.data) - 1) // (batch_size * seq_len)
+        num_batches = (int(self.data.numel()) - 1) // (batch_size * seq_len)
         for i in range(num_batches):
             idx = i * batch_size * seq_len
             Xb = self.data[idx: idx + batch_size * seq_len].reshape(batch_size, seq_len)
@@ -171,10 +171,10 @@ class SimpleLLMObjective(Objective):
     def num_stages(self) -> int:
         return self.num_pipeline_stages
 
-    def initial_activation(self, batch: Batch) -> np.ndarray:
-        return np.zeros(1)
+    def initial_activation(self, batch: Batch) -> torch.Tensor:
+        return torch.empty(0, dtype=torch.float32, device=self.device)
 
-    def initial_stage_weights(self, mode: str = "random", seed: int = 0, scale=None) -> list[np.ndarray]:
+    def initial_stage_weights(self, mode: str = "random", seed: int = 0, scale=None) -> list[torch.Tensor]:
         torch.manual_seed(seed)
         return [get_module_weights(m) for m in self.stages_modules]
 
@@ -184,78 +184,81 @@ class SimpleLLMObjective(Objective):
     # ---------------------------------------------------------------------
     # PIPELINE FORWARD PASS
     # ---------------------------------------------------------------------
-    def forward_stage(self, batch: Batch, stage: int, w_stage: np.ndarray, activation_in: np.ndarray) -> tuple[
-        np.ndarray, dict]:
+    def forward_stage(
+        self,
+        batch: Batch,
+        stage: int,
+        w_stage: torch.Tensor,
+        activation_in: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict]:
         module = self.stages_modules[stage]
         set_module_weights(module, w_stage)
 
         with torch.no_grad():
             if stage == 0:
                 Xb, _ = batch
-                # Move input batch to GPU
-                x_tensor = torch.tensor(Xb, dtype=torch.long, device=self.device)
+                x_tensor = Xb
             else:
-                # Move incoming activations to GPU
-                x_tensor = torch.tensor(activation_in, dtype=torch.float32, device=self.device)
+                x_tensor = activation_in
 
             out_tensor = module(x_tensor)
 
-        cache = {"activation_in": activation_in.copy()}
+        cache = {"activation_in": activation_in.detach()}
 
-        # Pull output activations back to CPU as NumPy array
-        return out_tensor.cpu().numpy(), cache
+        return out_tensor, cache
 
     # ---------------------------------------------------------------------
     # LOSS & GRADIENT
     # ---------------------------------------------------------------------
-    def loss_and_output_grad(self, batch: Batch, final_activation: np.ndarray) -> tuple[float, np.ndarray]:
+    def loss_and_output_grad(self, batch: Batch, final_activation: torch.Tensor) -> tuple[float, torch.Tensor]:
         _, yb = batch
-        # Push activations and targets to GPU
-        logits = torch.tensor(final_activation, dtype=torch.float32, requires_grad=True, device=self.device)
-        targets = torch.tensor(yb, dtype=torch.long, device=self.device)
+        logits = final_activation.detach().clone().requires_grad_(True)
+        targets = yb
 
         loss = F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1))
         loss.backward()
 
-        # Pull gradients back to CPU
-        return loss.item(), logits.grad.cpu().numpy()
+        return loss.item(), logits.grad.detach()
 
     # ---------------------------------------------------------------------
     # PIPELINE BACKWARD PASS (Uses Activation Recomputation)
     # ---------------------------------------------------------------------
-    def backward_stage(self, batch: Batch, stage: int, w_stage: np.ndarray, cache: dict, grad_out: np.ndarray) -> tuple[
-        np.ndarray, np.ndarray]:
+    def backward_stage(
+        self,
+        batch: Batch,
+        stage: int,
+        w_stage: torch.Tensor,
+        cache: dict,
+        grad_out: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         module = self.stages_modules[stage]
 
         set_module_weights(module, w_stage)
-        module.zero_grad()
+        module.zero_grad(set_to_none=True)
 
         if stage == 0:
             Xb, _ = batch
-            x_tensor = torch.tensor(Xb, dtype=torch.long, device=self.device)
+            x_tensor = Xb
         else:
-            x_tensor = torch.tensor(cache["activation_in"], dtype=torch.float32, requires_grad=True, device=self.device)
+            x_tensor = cache["activation_in"].detach().requires_grad_(True)
 
         out_tensor = module(x_tensor)
 
-        # Move incoming backward gradients to GPU
-        grad_out_tensor = torch.tensor(grad_out, dtype=torch.float32, device=self.device)
-        out_tensor.backward(grad_out_tensor)
+        out_tensor.backward(grad_out)
 
         grad_w = get_module_grads(module)
 
         if stage == 0:
-            grad_in = np.zeros_like(grad_out)
+            grad_in = torch.zeros_like(grad_out)
         else:
-            # Pull backwards activations to CPU
-            grad_in = x_tensor.grad.cpu().numpy()
+            grad_in = x_tensor.grad.detach()
 
         return grad_w, grad_in
 
     # =====================================================================
     # FULL EVALUATION HELPERS
     # =====================================================================
-    def full_objective(self, stage_weights: list[np.ndarray]) -> float:
+    def full_objective(self, stage_weights: list[torch.Tensor]) -> float:
         total_loss = 0.0
         for batch in self._batches:
             act = None
@@ -264,18 +267,20 @@ class SimpleLLMObjective(Objective):
                 set_module_weights(module, stage_weights[stage])
                 with torch.no_grad():
                     if stage == 0:
-                        act = module(torch.tensor(batch[0], dtype=torch.long, device=self.device))
+                        act = module(batch[0])
                     else:
                         act = module(act)
-            loss, _ = self.loss_and_output_grad(batch, act.cpu().numpy())
+            loss, _ = self.loss_and_output_grad(batch, act)
             total_loss += loss
         return total_loss / len(self._batches)
 
-    def full_gradient(self, stage_weights: list[np.ndarray]) -> list[np.ndarray]:
+    def full_gradient(self, stage_weights: list[torch.Tensor]) -> list[torch.Tensor]:
         dummy_grads = []
         for module in self.stages_modules:
             num_params = sum(p.numel() for p in module.parameters())
-            dummy_grads.append(np.zeros(num_params, dtype=np.float32))
+            device = next(module.parameters()).device
+            dtype = next(module.parameters()).dtype
+            dummy_grads.append(torch.zeros(num_params, dtype=dtype, device=device))
         return dummy_grads
 
     @property

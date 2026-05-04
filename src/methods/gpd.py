@@ -9,7 +9,13 @@ from src.methods.utils import sample_stale_read_indices
 from src.objectives.base import Objective
 from src.state import Timeline
 from src.state.trace import SimulationTrace
-from src.utils.partitioning import clone_stage_weights, combine_stage_weights
+from src.utils.partitioning import (
+    clone_stage_weights,
+    clone_weight,
+    combine_stage_weights,
+    stage_weight_norm,
+    sum_squared_stage_weights,
+)
 from src.state.versions import VersionTracker
 
 def extract_pipedream_backward_ops(timeline):
@@ -52,6 +58,7 @@ class GPDMethod(Method):
     pipedream_exact_delays: np.ndarray | None = None
 
     init_stage_weights: list[np.ndarray] | None = None
+    store_final_weight: bool = True
     name: str = "GPD"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -89,7 +96,7 @@ class GPDMethod(Method):
 
         def compute_full_grad_norm_sq(current_stage_weights: list[np.ndarray]) -> float:
             full_grad = objective.full_gradient(current_stage_weights)
-            return float(sum(np.sum(g ** 2) for g in full_grad))
+            return sum_squared_stage_weights(full_grad)
 
         def compute_theory_bound(
             K_value: int,
@@ -205,7 +212,7 @@ class GPDMethod(Method):
 
 
             # form our weird z weights for all stages based on the sampled read indices
-            z_stage_weights = [history[read_indices[ss]][ss].copy() for ss in range(num_stages)]
+            z_stage_weights = [clone_weight(history[read_indices[ss]][ss]) for ss in range(num_stages)]
 
             batch = batches[m]
 
@@ -254,7 +261,7 @@ class GPDMethod(Method):
             if grad_s is None:
                 raise RuntimeError(f"Failed to compute gradient for stage {s} in GPD")
 
-            estimated_G = max(estimated_G, float(np.linalg.norm(grad_s)))
+            estimated_G = max(estimated_G, stage_weight_norm(grad_s))
 
             # Update the stage weights for stage s using the computed gradient.
             # This simulates a block update for that stage.
@@ -288,8 +295,15 @@ class GPDMethod(Method):
 
             current_full = combine_stage_weights(stage_weights)
             stale_full = combine_stage_weights(z_stage_weights)
-            stale_distance_trace.append(np.linalg.norm(current_full - stale_full))
-            grad_norm_trace.append(np.linalg.norm(grad_s))
+            stale_distance_trace.append(stage_weight_norm(current_full - stale_full))
+            grad_norm_trace.append(stage_weight_norm(grad_s))
+
+        metadata = {
+            "delta": self.delta,
+            "stage_update_counts": stage_update_counts,
+        }
+        if self.store_final_weight:
+            metadata["final_weight"] = combine_stage_weights(stage_weights)
 
         return SimulationTrace(
             method_name=self.name,
@@ -307,9 +321,5 @@ class GPDMethod(Method):
             estimated_G_trace=np.array(estimated_G_trace),
             theory_bound_trace=np.array(theory_bound_trace),
 
-            metadata={
-                "delta": self.delta,
-                "stage_update_counts": stage_update_counts,
-                "final_weight": combine_stage_weights(stage_weights),
-            },
+            metadata=metadata,
         )

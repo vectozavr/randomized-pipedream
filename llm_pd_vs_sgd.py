@@ -137,6 +137,8 @@ def make_pd_method(
         init_stage_weights=init_stage_weights,
         log_full_objective=False,
         log_forward_loss=True,
+        log_grad_norms=False,
+        store_final_weight=False,
         name=name,
     )
 
@@ -160,6 +162,8 @@ def make_local_sgd_method(
         init_stage_weights=init_stage_weights,
         log_full_objective=False,
         log_forward_loss=True,
+        log_grad_norms=False,
+        store_final_weight=False,
         name=name,
     )
 
