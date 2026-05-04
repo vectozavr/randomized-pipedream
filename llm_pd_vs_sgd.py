@@ -4,6 +4,7 @@ import argparse
 import gc
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -72,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pd-lr-grid", type=str, default="pow2:-4:2")
     parser.add_argument("--local-sgd-lr-grid", type=str, default="pow2:-4:2")
     parser.add_argument("--stable-tail-frac", type=float, default=0.2)
+    parser.add_argument("--no-progress", action="store_true")
 
     return parser
 
@@ -129,6 +131,7 @@ def make_pd_method(
     timeline,
     training_batch_indices: list[int],
     init_stage_weights: list[np.ndarray],
+    show_progress: bool,
     name: str,
 ) -> PipeDreamMethod:
     return PipeDreamMethod(
@@ -140,6 +143,7 @@ def make_pd_method(
         log_forward_loss=True,
         log_grad_norms=False,
         store_final_weight=False,
+        show_progress=show_progress,
         name=name,
     )
 
@@ -152,6 +156,7 @@ def make_local_sgd_method(
     init_stage_weights: list[np.ndarray],
     num_runs: int,
     local_steps: int,
+    show_progress: bool,
     name: str,
 ) -> LocalMinibatchSGD1F1BMethod:
     return LocalMinibatchSGD1F1BMethod(
@@ -165,6 +170,7 @@ def make_local_sgd_method(
         log_forward_loss=True,
         log_grad_norms=False,
         store_final_weight=False,
+        show_progress=show_progress,
         name=name,
     )
 
@@ -515,6 +521,7 @@ def main() -> None:
     )
     init_stage_weights = objective.initial_stage_weights(mode="random", seed=args.seed)
     num_dataset_batches = len(objective.get_batches())
+    show_progress = not args.no_progress
 
     pd_training_batch_indices = build_training_batch_schedule(
         num_dataset_batches=num_dataset_batches,
@@ -534,6 +541,10 @@ def main() -> None:
     print(f"dataset                  = {data_info.source}")
     print(f"dataset path             = {data_info.path}")
     print(f"chars / vocab            = {data_info.num_chars} / {data_info.vocab_size}")
+    print(
+        f"model parameters         = {objective.num_parameters:,} "
+        f"({objective.parameter_mebibytes:.2f} MiB of weights)"
+    )
     print(f"num data batches         = {num_dataset_batches}")
     print(f"num stages               = {args.num_stages}")
     print(f"target time steps        = {target_time_steps}")
@@ -544,6 +555,7 @@ def main() -> None:
     print(f"embed dim / heads        = {args.embed_dim} / {args.num_heads}")
     print(f"tune stepsizes           = {args.tune_stepsizes}")
     print("=" * 80)
+    sys.stdout.flush()
 
     args.save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -575,6 +587,7 @@ def main() -> None:
                 timeline=pd_timeline,
                 training_batch_indices=pd_training_batch_indices,
                 init_stage_weights=init_stage_weights,
+                show_progress=show_progress,
                 name=f"PipeDream lr={lr:.6e}",
             ),
             seeds=tuning_seeds,
@@ -591,6 +604,7 @@ def main() -> None:
                 init_stage_weights=init_stage_weights,
                 num_runs=local_num_runs,
                 local_steps=args.local_steps,
+                show_progress=show_progress,
                 name=f"LocalSGD lr={lr:.6e}",
             ),
             seeds=tuning_seeds,
@@ -633,6 +647,7 @@ def main() -> None:
             timeline=pd_timeline,
             training_batch_indices=pd_training_batch_indices,
             init_stage_weights=init_stage_weights,
+            show_progress=show_progress,
             name=f"PipeDream lr={pd_lr:.1e}",
         ),
         make_local_sgd_method(
@@ -642,6 +657,7 @@ def main() -> None:
             init_stage_weights=init_stage_weights,
             num_runs=local_num_runs,
             local_steps=args.local_steps,
+            show_progress=show_progress,
             name=f"LocalSGD M={local_num_runs} K={args.local_steps} lr={local_lr:.1e}",
         ),
     ]

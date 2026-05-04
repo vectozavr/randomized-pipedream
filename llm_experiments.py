@@ -4,6 +4,7 @@ import argparse
 import gc
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -69,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pd-lr-grid", type=str, default="pow2:-5:5")
     parser.add_argument("--gpd-lr-grid", type=str, default="pow2:-5:5")
     parser.add_argument("--stable-tail-frac", type=float, default=0.2)
+    parser.add_argument("--no-progress", action="store_true")
 
     return parser
 
@@ -108,6 +110,7 @@ def make_pd_method(
     timeline,
     training_batch_indices: list[int],
     init_stage_weights: list[np.ndarray],
+    show_progress: bool,
     name: str,
 ) -> PipeDreamMethod:
     return PipeDreamMethod(
@@ -117,6 +120,7 @@ def make_pd_method(
         init_stage_weights=init_stage_weights,
         log_grad_norms=False,
         store_final_weight=False,
+        show_progress=show_progress,
         name=name,
     )
 
@@ -129,6 +133,7 @@ def make_gpd_method(
     seed: int,
     training_batch_indices: list[int],
     init_stage_weights: list[np.ndarray],
+    show_progress: bool,
     name: str,
 ) -> GPDMethod:
     return GPDMethod(
@@ -139,6 +144,7 @@ def make_gpd_method(
         training_batch_indices=training_batch_indices,
         init_stage_weights=init_stage_weights,
         store_final_weight=False,
+        show_progress=show_progress,
         name=name,
     )
 
@@ -391,6 +397,7 @@ def main() -> None:
         num_heads=args.num_heads,
     )
     init_stage_weights = objective.initial_stage_weights(mode="random", seed=args.seed)
+    show_progress = not args.no_progress
 
     scheduler = PipeDream1F1BScheduler(noam=args.noam or args.num_stages)
     timeline = scheduler.generate(
@@ -412,6 +419,10 @@ def main() -> None:
     print(f"dataset             = {data_info.source}")
     print(f"dataset path        = {data_info.path}")
     print(f"chars / vocab       = {data_info.num_chars} / {data_info.vocab_size}")
+    print(
+        f"model parameters    = {objective.num_parameters:,} "
+        f"({objective.parameter_mebibytes:.2f} MiB of weights)"
+    )
     print(f"num data batches    = {len(objective.get_batches())}")
     print(f"num stages          = {args.num_stages}")
     print(f"num microbatches    = {args.num_microbatches}")
@@ -421,6 +432,7 @@ def main() -> None:
     print(f"GPD delta           = {gpd_delta}")
     print(f"tune stepsizes      = {args.tune_stepsizes}")
     print("=" * 80)
+    sys.stdout.flush()
 
     fig_sched, _ = plot_schedule(timeline, startup_boundary=None, reduce_text=True, max_xtick_labels=24)
     fig_sched.savefig(args.save_dir / "pipedream_schedule.png", dpi=200, bbox_inches="tight")
@@ -444,6 +456,7 @@ def main() -> None:
                 timeline=timeline,
                 training_batch_indices=training_batch_indices,
                 init_stage_weights=init_stage_weights,
+                show_progress=show_progress,
                 name=f"PipeDream lr={lr:.6e}",
             ),
             seeds=tuning_seeds,
@@ -461,6 +474,7 @@ def main() -> None:
                 seed=seed,
                 training_batch_indices=training_batch_indices,
                 init_stage_weights=init_stage_weights,
+                show_progress=show_progress,
                 name=f"GPD lr={lr:.6e}",
             ),
             seeds=tuning_seeds,
@@ -499,6 +513,7 @@ def main() -> None:
             timeline=timeline,
             training_batch_indices=training_batch_indices,
             init_stage_weights=init_stage_weights,
+            show_progress=show_progress,
             name=f"PipeDream lr={pd_lr:.1e}",
         ),
         make_gpd_method(
@@ -508,6 +523,7 @@ def main() -> None:
             seed=args.gpd_seed,
             training_batch_indices=training_batch_indices,
             init_stage_weights=init_stage_weights,
+            show_progress=show_progress,
             name=f"GPD delta={gpd_delta} lr={gpd_lr:.1e}",
         ),
     ]

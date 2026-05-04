@@ -7,6 +7,7 @@ from src.state.microbatch import MicrobatchRuntime
 from src.state.timeline import Timeline, num_microbatches_from_timeline
 from src.state.trace import SimulationTrace
 from src.state.versions import VersionTracker
+from src.utils.progress import ProgressBar
 from src.utils.partitioning import (
     clone_stage_weights,
     clone_weight,
@@ -29,6 +30,7 @@ class LocalMinibatchSGD1F1BMethod(Method):
     log_forward_loss: bool = False
     log_grad_norms: bool = True
     store_final_weight: bool = True
+    show_progress: bool = False
     name: str = "LocalSGD-1F1B"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -95,6 +97,7 @@ class LocalMinibatchSGD1F1BMethod(Method):
 
         synced_rounds = set()  # Track which rounds have been averaged
 
+        progress = ProgressBar(len(self.timeline), label=self.name, enabled=self.show_progress)
         for t, ops in enumerate(self.timeline):
             for stage, op in enumerate(ops):
                 if op is None:
@@ -234,6 +237,8 @@ class LocalMinibatchSGD1F1BMethod(Method):
                 objective_trace.append(latest_forward_loss)
             time_completed.append(sum(1 for mb_idx in range(num_microbatches) if backward_versions[mb_idx, 0] >= 0))
             history_len += 1
+            progress.update(t + 1)
+        progress.close()
 
         final_averaged_weights = get_averaged_weights() if self.store_final_weight else None
 

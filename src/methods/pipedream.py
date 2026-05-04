@@ -18,6 +18,7 @@ from src.utils.partitioning import (
     stage_weight_norm,
     sum_squared_stage_weights,
 )
+from src.utils.progress import ProgressBar
 
 
 @dataclass
@@ -30,6 +31,7 @@ class PipeDreamMethod(Method):
     log_forward_loss: bool = False
     log_grad_norms: bool = True
     store_final_weight: bool = True
+    show_progress: bool = False
     name: str = "PipeDream"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -83,6 +85,7 @@ class PipeDreamMethod(Method):
         cumulative_full_grad_norm_sq = initial_full_grad_norm_sq
         grad_norm_trace: list[float] = []
 
+        progress = ProgressBar(len(self.timeline), label=self.name, enabled=self.show_progress)
         for t, ops in enumerate(self.timeline):  # Iterate over time steps and operations in the timeline.
             for stage, op in enumerate(ops):  # Iterate over stages & their corresponding operations at this time step.
                 if op is None:
@@ -245,6 +248,8 @@ class PipeDreamMethod(Method):
 
             # and the history of stage weight versions for debugging and analysis.
             stage_version_history.append(versions.snapshot())
+            progress.update(t + 1)
+        progress.close()
 
         if np.any(forward_versions != backward_versions):
             # In a correct implementation of PipeDream, the version of weights used for the forward pass

@@ -171,6 +171,18 @@ class SimpleLLMObjective(Objective):
     def num_stages(self) -> int:
         return self.num_pipeline_stages
 
+    @property
+    def num_parameters(self) -> int:
+        return int(sum(p.numel() for module in self.stages_modules for p in module.parameters()))
+
+    @property
+    def parameter_bytes(self) -> int:
+        return int(sum(p.numel() * p.element_size() for module in self.stages_modules for p in module.parameters()))
+
+    @property
+    def parameter_mebibytes(self) -> float:
+        return self.parameter_bytes / (1024.0 ** 2)
+
     def initial_activation(self, batch: Batch) -> torch.Tensor:
         return torch.empty(0, dtype=torch.float32, device=self.device)
 

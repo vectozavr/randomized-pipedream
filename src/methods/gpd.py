@@ -9,6 +9,7 @@ from src.methods.utils import sample_stale_read_indices
 from src.objectives.base import Objective
 from src.state import Timeline
 from src.state.trace import SimulationTrace
+from src.utils.progress import ProgressBar
 from src.utils.partitioning import (
     clone_stage_weights,
     clone_weight,
@@ -59,6 +60,7 @@ class GPDMethod(Method):
 
     init_stage_weights: list[np.ndarray] | None = None
     store_final_weight: bool = True
+    show_progress: bool = False
     name: str = "GPD"
 
     def run(self, objective: Objective) -> SimulationTrace:
@@ -142,6 +144,7 @@ class GPDMethod(Method):
         grad_norm_trace = []
         stage_update_counts = np.zeros(num_stages, dtype=int)
 
+        progress = ProgressBar(self.num_iterations, label=self.name, enabled=self.show_progress)
         for k in range(self.num_iterations):
 
             mb_pd = None
@@ -297,6 +300,8 @@ class GPDMethod(Method):
             stale_full = combine_stage_weights(z_stage_weights)
             stale_distance_trace.append(stage_weight_norm(current_full - stale_full))
             grad_norm_trace.append(stage_weight_norm(grad_s))
+            progress.update(k + 1)
+        progress.close()
 
         metadata = {
             "delta": self.delta,
