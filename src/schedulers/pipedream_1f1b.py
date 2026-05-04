@@ -159,7 +159,7 @@ def plot_schedule(
                     str(mb + 1),
                     ha='center',
                     va='center',
-                    fontsize=15,
+                    fontsize=21,
                     color='white',
                     fontweight='bold'
                 )
