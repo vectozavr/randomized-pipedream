@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pd-noam", type=int, default=None)
     parser.add_argument("--local-num-runs", type=int, default=None)
     parser.add_argument("--local-steps", type=int, default=5)
+    parser.add_argument(
+        "--local-steps-grid",
+        type=str,
+        default="1,2,4,8,16",
+        help="Comma-separated LocalSGD local-step values. Use an empty string to fall back to --local-steps.",
+    )
     parser.add_argument("--shuffle-batches", action="store_true")
 
     parser.add_argument("--pd-lr", type=float, default=6.25e-02)
@@ -421,6 +427,36 @@ def plot_lr_sweep_curves(sweep_result, path: Path, *, log_scale: bool) -> None:
     plt.close(fig)
 
 
+def plot_selected_lr_sweep_curves(
+    selected_sweeps: list[tuple[str, dict[str, object], float]],
+    path: Path,
+    *,
+    log_scale: bool,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(9.5, 5.5))
+    eps = 1e-16
+
+    for method_name, sweep_result, selected_lr in selected_sweeps:
+        lr = min(sweep_result["results"].keys(), key=lambda candidate: abs(candidate - selected_lr))
+        curve = sweep_result["results"][lr]["mean_curve"]
+        y = np.maximum(curve, eps) if log_scale else curve
+        label = f"{method_name}, lr={lr:.1e}"
+        if log_scale:
+            ax.semilogy(y, label=label, linewidth=2.4)
+        else:
+            ax.plot(y, label=label, linewidth=2.4)
+
+    ax.set_xlabel("time step")
+    ax.set_ylabel("last-stage forward loss")
+    ax.set_title("Selected learning-rate curves")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_lr_sweep_summary(sweep_result, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lrs = np.array(sorted(sweep_result["results"].keys()))
@@ -484,11 +520,12 @@ def main() -> None:
         raise RuntimeError("SimpleLLMObjective requires PyTorch to be installed.") from exc
 
     local_num_runs = args.local_num_runs if args.local_num_runs is not None else args.num_stages
+    local_steps_values = parse_int_list(args.local_steps_grid) if args.local_steps_grid.strip() else [args.local_steps]
+    local_steps_values = sorted(set(local_steps_values))
+    if not local_steps_values or any(k <= 0 for k in local_steps_values):
+        raise ValueError("--local-steps-grid must contain positive integers.")
+
     pd_scheduler = PipeDream1F1BScheduler(noam=args.pd_noam or args.num_stages)
-    local_scheduler = IndependentLocalSGDScheduler(
-        num_runs=local_num_runs,
-        local_steps=args.local_steps,
-    )
 
     if args.target_time_steps is None:
         pd_num_microbatches = args.pd_num_microbatches
@@ -501,10 +538,29 @@ def main() -> None:
             target_time_steps,
         )
 
-    local_num_microbatches, local_timeline = find_optimal_microbatches(
-        lambda n: local_scheduler.generate(args.num_stages, n),
-        target_time_steps,
-    )
+    local_configs = []
+    for local_steps in local_steps_values:
+        local_scheduler = IndependentLocalSGDScheduler(
+            num_runs=local_num_runs,
+            local_steps=local_steps,
+        )
+        local_num_microbatches, local_timeline = find_optimal_microbatches(
+            lambda n, scheduler=local_scheduler: scheduler.generate(args.num_stages, n),
+            target_time_steps,
+        )
+        local_configs.append(
+            {
+                "local_steps": local_steps,
+                "num_microbatches": local_num_microbatches,
+                "timeline": local_timeline,
+                "selected_lr": args.local_sgd_lr,
+                "stable_lr": None,
+                "best_lr": None,
+                "lr_table": None,
+                "sweep": None,
+                "training_batch_indices": None,
+            }
+        )
 
     target_chars = args.num_data_batches * args.batch_size * args.seq_len + 1
     max_chars = args.max_chars if args.max_chars is not None else target_chars
@@ -535,12 +591,13 @@ def main() -> None:
         shuffle_each_epoch=args.shuffle_batches,
         seed=args.seed + 1,
     )
-    local_training_batch_indices = build_training_batch_schedule(
-        num_dataset_batches=num_dataset_batches,
-        num_microbatches=local_num_microbatches,
-        shuffle_each_epoch=args.shuffle_batches,
-        seed=args.seed + 1,
-    )
+    for config in local_configs:
+        config["training_batch_indices"] = build_training_batch_schedule(
+            num_dataset_batches=num_dataset_batches,
+            num_microbatches=config["num_microbatches"],
+            shuffle_each_epoch=args.shuffle_batches,
+            seed=args.seed + 1,
+        )
 
     print("=" * 80)
     print("LLM PIPE DREAM VS LOCAL SGD CONFIG")
@@ -555,8 +612,13 @@ def main() -> None:
     print(f"num stages               = {args.num_stages}")
     print(f"target time steps        = {target_time_steps}")
     print(f"PipeDream timeline       = {len(pd_timeline)} steps, N={pd_num_microbatches}")
-    print(f"LocalSGD timeline        = {len(local_timeline)} steps, N={local_num_microbatches}")
-    print(f"LocalSGD M / K           = {local_num_runs} / {args.local_steps}")
+    print(f"LocalSGD M               = {local_num_runs}")
+    print(f"LocalSGD K grid          = {local_steps_values}")
+    for config in local_configs:
+        print(
+            f"LocalSGD K={config['local_steps']:<4d} timeline = "
+            f"{len(config['timeline'])} steps, N={config['num_microbatches']}"
+        )
     print(f"batch size / seq         = {args.batch_size} / {args.seq_len}")
     print(f"embed dim / heads        = {args.embed_dim} / {args.num_heads}")
     print(f"tune stepsizes           = {args.tune_stepsizes}")
@@ -570,10 +632,19 @@ def main() -> None:
     fig_pd_sched.savefig(args.save_dir / "pipedream_schedule.png", dpi=200, bbox_inches="tight")
     plt.close(fig_pd_sched)
 
-    fig_local_sched, _ = plot_schedule(local_timeline, startup_boundary=None, reduce_text=True, max_xtick_labels=24)
-    (args.save_dir / "local_sgd_schedule.png").parent.mkdir(parents=True, exist_ok=True)
-    fig_local_sched.savefig(args.save_dir / "local_sgd_schedule.png", dpi=200, bbox_inches="tight")
-    plt.close(fig_local_sched)
+    for idx, config in enumerate(local_configs):
+        fig_local_sched, _ = plot_schedule(
+            config["timeline"],
+            startup_boundary=None,
+            reduce_text=True,
+            max_xtick_labels=24,
+        )
+        schedule_path = args.save_dir / f"local_sgd_schedule_K{config['local_steps']}.png"
+        schedule_path.parent.mkdir(parents=True, exist_ok=True)
+        fig_local_sched.savefig(schedule_path, dpi=200, bbox_inches="tight")
+        if idx == 0:
+            fig_local_sched.savefig(args.save_dir / "local_sgd_schedule.png", dpi=200, bbox_inches="tight")
+        plt.close(fig_local_sched)
 
     pd_lr = args.pd_lr
     local_lr = args.local_sgd_lr
@@ -599,66 +670,113 @@ def main() -> None:
             seeds=tuning_seeds,
             tail_frac=args.stable_tail_frac,
         )
-        local_sweep = sweep_learning_rates(
-            objective=objective,
-            method_name="LocalSGD",
-            learning_rates=local_lrs,
-            method_factory_builder=lambda lr, seed: make_local_sgd_method(
-                lr=lr,
-                timeline=local_timeline,
-                training_batch_indices=local_training_batch_indices,
-                init_stage_weights=init_stage_weights,
-                num_runs=local_num_runs,
-                local_steps=args.local_steps,
-                show_progress=show_progress,
-                name=f"LocalSGD lr={lr:.6e}",
-            ),
-            seeds=tuning_seeds,
-            tail_frac=args.stable_tail_frac,
-        )
+        local_sweeps = {}
+        for config in local_configs:
+            local_steps = config["local_steps"]
+            local_sweep = sweep_learning_rates(
+                objective=objective,
+                method_name=f"LocalSGD K={local_steps}",
+                learning_rates=local_lrs,
+                method_factory_builder=lambda lr, seed, config=config: make_local_sgd_method(
+                    lr=lr,
+                    timeline=config["timeline"],
+                    training_batch_indices=config["training_batch_indices"],
+                    init_stage_weights=init_stage_weights,
+                    num_runs=local_num_runs,
+                    local_steps=config["local_steps"],
+                    show_progress=show_progress,
+                    name=f"LocalSGD K={config['local_steps']} lr={lr:.6e}",
+                ),
+                seeds=tuning_seeds,
+                tail_frac=args.stable_tail_frac,
+            )
+            local_sweeps[f"LocalSGD K={local_steps}"] = local_sweep
+            config["sweep"] = local_sweep
 
         stable_pd_lr, pd_lr_table = select_stable_learning_rate(
             pd_sweep,
             tail_frac=args.stable_tail_frac,
         )
-        stable_local_lr, local_lr_table = select_stable_learning_rate(
-            local_sweep,
-            tail_frac=args.stable_tail_frac,
-        )
 
         if args.lr_selection == "best-final":
             pd_lr = float(pd_sweep["best_lr"])
-            local_lr = float(local_sweep["best_lr"])
         else:
             pd_lr = stable_pd_lr
-            local_lr = stable_local_lr
+
+        local_tuning_summary = {}
+        for config in local_configs:
+            local_sweep = config["sweep"]
+            stable_local_lr, local_lr_table = select_stable_learning_rate(
+                local_sweep,
+                tail_frac=args.stable_tail_frac,
+            )
+            if args.lr_selection == "best-final":
+                selected_local_lr = float(local_sweep["best_lr"])
+            else:
+                selected_local_lr = stable_local_lr
+
+            config["selected_lr"] = selected_local_lr
+            config["stable_lr"] = stable_local_lr
+            config["best_lr"] = float(local_sweep["best_lr"])
+            config["lr_table"] = local_lr_table
+
+            key = f"K={config['local_steps']}"
+            local_tuning_summary[key] = {
+                "final_point_best_lr": float(local_sweep["best_lr"]),
+                "stable_lr": float(stable_local_lr),
+                "selected_lr": float(selected_local_lr),
+                "lr_table": local_lr_table,
+            }
 
         save_sweep_summary(
             args.save_dir / "stepsize_sweeps_summary.json",
-            {"PipeDream": pd_sweep, "LocalSGD": local_sweep},
+            {"PipeDream": pd_sweep, **local_sweeps},
+        )
+        plot_selected_lr_sweep_curves(
+            [
+                ("PipeDream", pd_sweep, pd_lr),
+                *[
+                    (f"LocalSGD K={config['local_steps']}", config["sweep"], config["selected_lr"])
+                    for config in local_configs
+                ],
+            ],
+            args.save_dir / "selected_lr_curves_log.png",
+            log_scale=True,
         )
 
         plot_lr_sweep_curves(pd_sweep, args.save_dir / "pd_lr_sweep_log.png", log_scale=True)
         plot_lr_sweep_summary(pd_sweep, args.save_dir / "pd_lr_sweep_summary.png")
-        plot_lr_sweep_curves(local_sweep, args.save_dir / "local_sgd_lr_sweep_log.png", log_scale=True)
-        plot_lr_sweep_summary(local_sweep, args.save_dir / "local_sgd_lr_sweep_summary.png")
+        for config in local_configs:
+            local_steps = config["local_steps"]
+            local_sweep = config["sweep"]
+            plot_lr_sweep_curves(
+                local_sweep,
+                args.save_dir / f"local_sgd_K{local_steps}_lr_sweep_log.png",
+                log_scale=True,
+            )
+            plot_lr_sweep_summary(
+                local_sweep,
+                args.save_dir / f"local_sgd_K{local_steps}_lr_sweep_summary.png",
+            )
 
         tuning_summary = {
             "pd_final_point_best_lr": float(pd_sweep["best_lr"]),
             "pd_stable_lr": float(stable_pd_lr),
             "pd_selected_lr": float(pd_lr),
             "pd_lr_table": pd_lr_table,
-            "local_sgd_final_point_best_lr": float(local_sweep["best_lr"]),
-            "local_sgd_stable_lr": float(stable_local_lr),
-            "local_sgd_selected_lr": float(local_lr),
-            "local_sgd_lr_table": local_lr_table,
+            "local_sgd": local_tuning_summary,
             "selection_policy": args.lr_selection,
         }
         print(f"LR selection policy  = {args.lr_selection}")
         print(f"PipeDream best-final = {float(pd_sweep['best_lr']):.6e}, stable = {stable_pd_lr:.6e}")
-        print(f"LocalSGD best-final  = {float(local_sweep['best_lr']):.6e}, stable = {stable_local_lr:.6e}")
+        for config in local_configs:
+            print(
+                f"LocalSGD K={config['local_steps']:<4d} best-final = {config['best_lr']:.6e}, "
+                f"stable = {config['stable_lr']:.6e}"
+            )
         print(f"Selected PipeDream lr = {pd_lr:.6e}")
-        print(f"Selected LocalSGD lr  = {local_lr:.6e}")
+        for config in local_configs:
+            print(f"Selected LocalSGD K={config['local_steps']:<4d} lr = {config['selected_lr']:.6e}")
 
     methods = [
         make_pd_method(
@@ -668,18 +786,24 @@ def main() -> None:
             init_stage_weights=init_stage_weights,
             show_progress=show_progress,
             name=f"PipeDream lr={pd_lr:.1e}",
-        ),
-        make_local_sgd_method(
-            lr=local_lr,
-            timeline=local_timeline,
-            training_batch_indices=local_training_batch_indices,
-            init_stage_weights=init_stage_weights,
-            num_runs=local_num_runs,
-            local_steps=args.local_steps,
-            show_progress=show_progress,
-            name=f"LocalSGD M={local_num_runs} K={args.local_steps} lr={local_lr:.1e}",
-        ),
+        )
     ]
+    for config in local_configs:
+        methods.append(
+            make_local_sgd_method(
+                lr=config["selected_lr"],
+                timeline=config["timeline"],
+                training_batch_indices=config["training_batch_indices"],
+                init_stage_weights=init_stage_weights,
+                num_runs=local_num_runs,
+                local_steps=config["local_steps"],
+                show_progress=show_progress,
+                name=(
+                    f"LocalSGD M={local_num_runs} K={config['local_steps']} "
+                    f"lr={config['selected_lr']:.1e}"
+                ),
+            )
+        )
 
     traces = {method.name: method.run(objective) for method in methods}
     curves = {name: time_curve_from_trace(trace) for name, trace in traces.items()}
@@ -700,16 +824,23 @@ def main() -> None:
         "target_time_steps": target_time_steps,
         "pd_num_microbatches": pd_num_microbatches,
         "pd_timeline_steps": len(pd_timeline),
-        "local_sgd_num_microbatches": local_num_microbatches,
-        "local_sgd_timeline_steps": len(local_timeline),
         "local_sgd_num_runs": local_num_runs,
-        "local_sgd_local_steps": args.local_steps,
+        "local_sgd_configs": [
+            {
+                "local_steps": config["local_steps"],
+                "num_microbatches": config["num_microbatches"],
+                "timeline_steps": len(config["timeline"]),
+                "selected_lr": config["selected_lr"],
+                "best_lr": config["best_lr"],
+                "stable_lr": config["stable_lr"],
+            }
+            for config in local_configs
+        ],
         "batch_size": args.batch_size,
         "seq_len": args.seq_len,
         "embed_dim": args.embed_dim,
         "num_heads": args.num_heads,
         "pd_lr": pd_lr,
-        "local_sgd_lr": local_lr,
         "final_forward_losses": {
             name: final_finite_value(curve) for name, curve in curves.items()
         },
@@ -724,7 +855,7 @@ def main() -> None:
 
     print(f"\nSaved outputs to: {args.save_dir.resolve()}")
     print("  - pipedream_schedule.png")
-    print("  - local_sgd_schedule.png")
+    print("  - local_sgd_schedule_K*.png")
     print("  - comparison_time_linear.png")
     print("  - comparison_time_log.png")
     print("  - curves.npz")
