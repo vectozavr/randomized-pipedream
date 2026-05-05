@@ -66,16 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-steps", type=int, default=5)
     parser.add_argument("--shuffle-batches", action="store_true")
 
-    parser.add_argument("--pd-lr", type=float, default=1e-3)
-    parser.add_argument("--local-sgd-lr", type=float, default=1e-3)
+    parser.add_argument("--pd-lr", type=float, default=6.25e-02)
+    parser.add_argument("--local-sgd-lr", type=float, default=6.25e-02)
     parser.add_argument("--tune-stepsizes", action="store_true")
     parser.add_argument("--tuning-seeds", type=str, default="0")
-    parser.add_argument("--pd-lr-grid", type=str, default="pow2:-4:2")
-    parser.add_argument("--local-sgd-lr-grid", type=str, default="pow2:-4:2")
+    parser.add_argument("--pd-lr-grid", type=str, default="pow2:-5:0")
+    parser.add_argument("--local-sgd-lr-grid", type=str, default="pow2:-5:0")
     parser.add_argument(
         "--lr-selection",
         choices=["best-final", "stable"],
-        default="best-final",
+        default="stable",
         help="Choose the swept learning rate by final loss or by the conservative stable selector.",
     )
     parser.add_argument("--stable-tail-frac", type=float, default=0.2)
