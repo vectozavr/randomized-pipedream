@@ -385,20 +385,41 @@ def plot_time_curves(curves: dict[str, np.ndarray], path: Path, *, log_scale: bo
     path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(8.5, 4.8))
     eps = 1e-16
-    for name, curve in curves.items():
+    markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
+    for idx, (name, curve) in enumerate(curves.items()):
         x = np.arange(len(curve))
         y = np.maximum(curve, eps) if log_scale else curve
+        markevery = max(1, len(curve) // 20)
+        marker = markers[idx % len(markers)]
         if log_scale:
-            ax.semilogy(x, y, linewidth=2.2, label=name)
+            ax.semilogy(
+                x,
+                y,
+                linewidth=2.2,
+                marker=marker,
+                markersize=4.5,
+                markevery=markevery,
+                label=name,
+            )
         else:
-            ax.plot(x, y, linewidth=2.2, label=name)
+            ax.plot(
+                x,
+                y,
+                linewidth=2.2,
+                marker=marker,
+                markersize=4.5,
+                markevery=markevery,
+                label=name,
+            )
     ax.set_xlabel("time step")
     ax.set_ylabel("last-stage forward loss")
-    ax.set_title("PipeDream vs LocalSGD on SimpleLLM")
+    ax.set_title("PD vs LocalSGD on NanoChat")
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=200, bbox_inches="tight")
+    if path.suffix.lower() != ".pdf":
+        fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
 
 
@@ -785,7 +806,7 @@ def main() -> None:
             training_batch_indices=pd_training_batch_indices,
             init_stage_weights=init_stage_weights,
             show_progress=show_progress,
-            name=f"PipeDream lr={pd_lr:.1e}",
+            name=rf"PD, $\gamma={pd_lr:.1e}$",
         )
     ]
     for config in local_configs:
@@ -799,8 +820,8 @@ def main() -> None:
                 local_steps=config["local_steps"],
                 show_progress=show_progress,
                 name=(
-                    f"LocalSGD M={local_num_runs} K={config['local_steps']} "
-                    f"lr={config['selected_lr']:.1e}"
+                    rf"LocalSGD, $R={local_num_runs}$, $H={config['local_steps']}$, "
+                    rf"$\gamma={config['selected_lr']:.1e}$"
                 ),
             )
         )
@@ -857,7 +878,9 @@ def main() -> None:
     print("  - pipedream_schedule.png")
     print("  - local_sgd_schedule_K*.png")
     print("  - comparison_time_linear.png")
+    print("  - comparison_time_linear.pdf")
     print("  - comparison_time_log.png")
+    print("  - comparison_time_log.pdf")
     print("  - curves.npz")
     print("  - summary.json")
 
