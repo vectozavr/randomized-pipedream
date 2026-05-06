@@ -383,39 +383,45 @@ def select_stable_learning_rate(
 
 def plot_time_curves(curves: dict[str, np.ndarray], path: Path, *, log_scale: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(8.5, 4.8))
+    fig, ax = plt.subplots(figsize=(8, 5))
     eps = 1e-16
     markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
+    T = min(len(curve) for curve in curves.values())
+    time_steps = np.arange(T)
+    marker_every = max(1, T // 12)
     for idx, (name, curve) in enumerate(curves.items()):
-        x = np.arange(len(curve))
-        y = np.maximum(curve, eps) if log_scale else curve
-        markevery = max(1, len(curve) // 20)
+        y_raw = curve[:T]
+        y = np.maximum(y_raw, eps) if log_scale else y_raw
         marker = markers[idx % len(markers)]
         if log_scale:
             ax.semilogy(
-                x,
+                time_steps,
                 y,
-                linewidth=2.2,
+                linewidth=2.5,
                 marker=marker,
-                markersize=4.5,
-                markevery=markevery,
+                markersize=7,
+                markevery=marker_every,
+                linestyle="-",
                 label=name,
             )
         else:
             ax.plot(
-                x,
+                time_steps,
                 y,
-                linewidth=2.2,
+                linewidth=2.5,
                 marker=marker,
-                markersize=4.5,
-                markevery=markevery,
+                markersize=7,
+                markevery=marker_every,
+                linestyle="-",
                 label=name,
             )
-    ax.set_xlabel("time step")
-    ax.set_ylabel("last-stage forward loss")
-    ax.set_title("PD vs LocalSGD on NanoChat")
-    ax.grid(True, alpha=0.25)
-    ax.legend()
+    ax.set_xlabel(r"Time step (simulated wall-clock time)", fontsize=18)
+    ax.set_ylabel(r"last-stage forward loss", fontsize=18, labelpad=-2)
+    ax.set_title("PD vs. LocalSGD on NanoChat", fontsize=18)
+    ax.tick_params(axis="both", which="major", labelsize=12)
+    ax.tick_params(axis="both", which="minor", labelsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10)
     fig.tight_layout()
     fig.savefig(path, dpi=200, bbox_inches="tight")
     if path.suffix.lower() != ".pdf":
