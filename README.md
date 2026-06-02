@@ -175,37 +175,6 @@ The runners write plots and trace artifacts under `results/`, including:
 
 Representative simple-objective outputs are kept in `results/debug_main/` and `results/figures/`.
 
-## Repository Layout
-
-```text
-.
-|-- README.md
-|-- pyproject.toml
-|-- main.py
-|-- llm_experiments.py
-|-- llm_pd_vs_sgd.py
-|-- configs
-|   |-- comparison.yaml
-|   |-- quadratic_gpd.yaml
-|   |-- quadratic_pipedream.yaml
-|   `-- quadratic_sgd.yaml
-|-- scripts
-|   |-- make_figure.py
-|   |-- run_experiment.py
-|   `-- run_sweep.py
-|-- src
-|   |-- experiments
-|   |-- methods
-|   |-- objectives
-|   |-- plotting
-|   |-- schedulers
-|   |-- state
-|   |-- tests
-|   `-- utils
-|-- notebooks
-`-- results
-```
-
 ## Citation
 
 If you use this code, please cite the accompanying paper.
