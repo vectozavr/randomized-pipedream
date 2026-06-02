@@ -1,48 +1,197 @@
-python - <<'PY'
-import torch
-print("torch:", torch.__version__)
-print("torch CUDA build:", torch.version.cuda)
-print("cuda available:", torch.cuda.is_available())
-print("device count:", torch.cuda.device_count())
-print(torch.cuda.get_device_name(0))
-PY# PipeDream / GPD research project
+# Randomized PipeDream
 
-This project packages the exploratory notebook code into a small research codebase.
+[![arXiv](https://img.shields.io/badge/arXiv-TBD-b31b1b.svg)](ARXIV_LINK_TO_INSERT)
 
-## What is included
+Code for studying PipeDream-style pipeline training and randomized stale block-gradient abstractions on small, inspectable objectives.
 
-- `src/objectives/` — objective definitions
-- `src/schedulers/` — schedule generation
-- `src/methods/` — PipeDream, GPD, and SGD simulations
-- `src/plotting/` — plotting helpers
-- `src/experiments/` — small orchestration helpers
-- `notebooks/experiments.ipynb` — thin notebook driver
+The `main` branch contains the simple-objective experiments used to debug schedules, weight stashing, stale reads, and convergence curves. The `llm-experiments` branch contains small nanochat-style experiments built around a compact character-level transformer objective.
 
-The current implementation centers on a block-partitioned quadratic objective and compares:
+![PipeDream, GPD, and SGD comparison](results/debug_main/comparison_log.png)
 
-- PipeDream-style 1F1B with weight stashing
-- Generalized PipeDream (GPD)
-- standard minibatch SGD
+## Paper
 
-## Quick start
+**Paper:** [Randomized PipeDream](ARXIV_LINK_TO_INSERT)
 
-From the project root:
+## Branches
+
+- `main`: simple synthetic objectives, including block-partitioned quadratic and logistic-regression objectives.
+- `llm-experiments`: small PyTorch language-model experiments using `SimpleLLMObjective`, toy text, optional Tiny Shakespeare data, and wall-clock-style schedule comparisons.
+
+Switch to the LLM branch with:
 
 ```bash
-python -m scripts.run_experiment configs/quadratic_pipedream.yaml
-python -m scripts.run_experiment configs/quadratic_gpd.yaml
-python -m scripts.run_experiment configs/quadratic_sgd.yaml
-python -m scripts.make_figure configs/comparison.yaml
+git fetch origin
+git switch llm-experiments
 ```
 
-Or open `notebooks/experiments.ipynb`.
+## What Is Included
 
-## Notes
+- `main.py`: exploratory runner for schedule plots, delay statistics, and comparison figures.
+- `configs/`: YAML configs for quadratic PipeDream, GPD, SGD, and comparison runs.
+- `scripts/run_experiment.py`: config-driven single-method experiment runner.
+- `scripts/run_sweep.py`: simple parameter sweep helper.
+- `scripts/make_figure.py`: comparison plotting entry point.
+- `llm_experiments.py`: PipeDream vs GPD/RPD on the small LLM objective.
+- `llm_pd_vs_sgd.py`: PipeDream vs local minibatch SGD on the small LLM objective.
+- `src/objectives/`: quadratic, logistic-regression, and simple LLM objectives.
+- `src/schedulers/`: 1F1B PipeDream, naive pipeline, and independent local-SGD schedules.
+- `src/methods/`: PipeDream, GPD, and local-SGD simulation methods.
+- `src/state/`: microbatch state, traces, timelines, and weight-version tracking.
+- `src/plotting/`: convergence and schedule plotting utilities.
+- `notebooks/`: exploratory notebooks and archived figures from earlier experiments.
 
-- The GPD abstraction follows the stale block-gradient formulation in the draft text:
-  a random stage-batch pair is sampled, a stale mixed model is read, and only the active block is updated.
-- The PipeDream implementation replays a static 1F1B timeline and enforces weight stashing by verifying that each microbatch-stage pair uses the same local version on forward and backward.
+## Methods
 
-## Minimal design choice
+The simple-objective experiments model a block-partitioned parameter vector whose blocks correspond to pipeline stages. They compare:
 
-This repository keeps the code modular enough for research, but avoids heavy configuration systems or large frameworks.
+- PipeDream-style 1F1B execution with weight stashing.
+- GPD/RPD-style randomized stale block-gradient updates.
+- Minibatch SGD baselines in the simple-objective notebooks/configs.
+- Local minibatch SGD baselines in the LLM experiments.
+
+PipeDream is replayed from an explicit pipeline timeline. The simulation tracks forward and backward weight versions and verifies that each microbatch-stage pair uses the same stashed weights on the forward and backward pass.
+
+GPD/RPD samples a stage, batch, and stale mixed model, then updates only the active block. The implementation can use uniform stale reads or delays derived from a PipeDream timeline.
+
+## Setup
+
+Python 3.10+ is recommended.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -e .
+```
+
+The LLM experiments require PyTorch:
+
+```bash
+python3 -m pip install torch
+```
+
+If you use the logistic-regression objective directly, install SciPy as well:
+
+```bash
+python3 -m pip install scipy
+```
+
+## Simple-Objective Workflow
+
+Run the quadratic experiments from the `main` branch:
+
+```bash
+python3 -m scripts.run_experiment configs/quadratic_pipedream.yaml
+python3 -m scripts.run_experiment configs/quadratic_gpd.yaml
+python3 -m scripts.run_experiment configs/quadratic_sgd.yaml
+```
+
+Create a comparison figure:
+
+```bash
+python3 -m scripts.make_figure configs/comparison.yaml
+```
+
+Run the exploratory debug script:
+
+```bash
+python3 main.py --save-dir results/debug_main
+```
+
+Run the tests:
+
+```bash
+python3 -m pytest -q
+```
+
+## LLM Workflow
+
+Use the `llm-experiments` branch for the nanochat-style experiments:
+
+```bash
+git switch llm-experiments
+```
+
+Run PipeDream vs GPD/RPD on the toy character dataset:
+
+```bash
+python3 llm_experiments.py \
+  --dataset toy \
+  --num-stages 4 \
+  --num-microbatches 16 \
+  --save-dir results/llm_experiments
+```
+
+Run PipeDream vs local minibatch SGD with matched schedule length:
+
+```bash
+python3 llm_pd_vs_sgd.py \
+  --dataset toy \
+  --target-time-steps 64 \
+  --save-dir results/llm_pd_vs_sgd
+```
+
+Use Tiny Shakespeare instead of the toy data with:
+
+```bash
+python3 llm_experiments.py --dataset tiny_shakespeare
+```
+
+The first Tiny Shakespeare run downloads the text into `data/llm/`.
+
+## Outputs
+
+The runners write plots and trace artifacts under `results/`, including:
+
+- schedule plots such as `pipedream_schedule.png`
+- convergence plots such as `comparison_linear.png` and `comparison_log.png`
+- LLM time-comparison plots such as `comparison_time_linear.png` and `comparison_time_log.png`
+- curve archives such as `curves.npz`
+- run summaries such as `summary.json`
+- optional learning-rate sweep plots when `--tune-stepsizes` is enabled
+
+Representative simple-objective outputs are kept in `results/debug_main/` and `results/figures/`.
+
+## Repository Layout
+
+```text
+.
+|-- README.md
+|-- pyproject.toml
+|-- main.py
+|-- llm_experiments.py
+|-- llm_pd_vs_sgd.py
+|-- configs
+|   |-- comparison.yaml
+|   |-- quadratic_gpd.yaml
+|   |-- quadratic_pipedream.yaml
+|   `-- quadratic_sgd.yaml
+|-- scripts
+|   |-- make_figure.py
+|   |-- run_experiment.py
+|   `-- run_sweep.py
+|-- src
+|   |-- experiments
+|   |-- methods
+|   |-- objectives
+|   |-- plotting
+|   |-- schedulers
+|   |-- state
+|   |-- tests
+|   `-- utils
+|-- notebooks
+`-- results
+```
+
+## Citation
+
+If you use this code, please cite the accompanying paper.
+
+```bibtex
+@article{randomizedpipedream2026,
+  title={Randomized PipeDream},
+  author={TBD},
+  journal={arXiv preprint},
+  year={2026}
+}
+```
