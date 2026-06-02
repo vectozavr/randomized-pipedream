@@ -9,12 +9,12 @@ The `main` branch contains the simple-objective experiments used to debug schedu
 <table>
   <tr>
     <td width="50%">
-      <a href="pdf/pd_vs_RPD_different_delta_rand_quad.pdf">
+      <a href="pdf/pd_vs_RPD_different_delta_rand_quad.png">
         <img src="pdf/pd_vs_RPD_different_delta_rand_quad.png" alt="PipeDream and RPD trajectories on a random quadratic objective">
       </a>
     </td>
     <td width="50%">
-      <a href="pdf/fixed_time_scaling_vs_stages_three_methods.pdf">
+      <a href="pdf/fixed_time_scaling_vs_stages_three_methods.png">
         <img src="pdf/fixed_time_scaling_vs_stages_three_methods.png" alt="Fixed-time scaling versus number of stages on logistic regression">
       </a>
     </td>
