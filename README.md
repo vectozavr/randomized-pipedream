@@ -6,7 +6,30 @@ Code for studying PipeDream-style pipeline training and randomized stale block-g
 
 The `main` branch contains the simple-objective experiments used to debug schedules, weight stashing, stale reads, and convergence curves. The `llm-experiments` branch contains small nanochat-style experiments built around a compact character-level transformer objective.
 
-![PipeDream, GPD, and SGD comparison](results/debug_main/comparison_log.png)
+<table>
+  <tr>
+    <td width="50%">
+      <a href="pdf/pd_vs_RPD_different_delta_rand_quad.pdf">
+        <img src="pdf/pd_vs_RPD_different_delta_rand_quad.png" alt="PipeDream and RPD trajectories on a random quadratic objective">
+      </a>
+    </td>
+    <td width="50%">
+      <a href="pdf/fixed_time_scaling_vs_stages_three_methods.pdf">
+        <img src="pdf/fixed_time_scaling_vs_stages_three_methods.png" alt="Fixed-time scaling versus number of stages on logistic regression">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      Random quadratic objective: best-tuned PD and RPD trajectories. S=8, batch size is 10, M=60, trained for 5 epochs.
+    </td>
+    <td>
+      Logistic regression: final objective versus the number of stages S under a fixed simulator-time budget. Batch size is 10, M=60, trained for 5 epochs. H=5, lambda=1e-4.
+    </td>
+  </tr>
+</table>
+
+The left plot validates RPD as a theoretical proxy for PD: when RPD is instantiated in the delay regime predicted for steady-state 1F1B execution, its trajectory closely matches PD on the quadratic objective. The right plot studies scaling on logistic regression: for each method and each stage count S, it reports the final objective reached under the same fixed simulator-time budget with d=512.
 
 ## Paper
 
