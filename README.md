@@ -1,6 +1,6 @@
 # Randomized PipeDream
 
-[![arXiv](https://img.shields.io/badge/arXiv-TBD-b31b1b.svg)](ARXIV_LINK_TO_INSERT)
+[![arXiv](https://img.shields.io/badge/arXiv-2606.03498-b31b1b.svg)](https://arxiv.org/abs/2606.03498)
 
 Code for studying PipeDream-style pipeline training and randomized stale block-gradient abstractions on small, inspectable objectives.
 
@@ -33,7 +33,7 @@ The left plot validates RPD as a theoretical proxy for PD: when RPD is instantia
 
 ## Paper
 
-**Paper:** [Randomized PipeDream](ARXIV_LINK_TO_INSERT)
+**Paper:** [Demystifying Pipeline Parallelism: First Theory for PipeDream](https://arxiv.org/abs/2606.03498)
 
 ## Branches
 
@@ -181,9 +181,9 @@ If you use this code, please cite the accompanying paper.
 
 ```bibtex
 @article{randomizedpipedream2026,
-  title={Randomized PipeDream},
-  author={TBD},
-  journal={arXiv preprint},
+  title={Demystifying Pipeline Parallelism: First Theory for PipeDream},
+  author={Ilin, Ivan and Richt{\'a}rik, Peter},
+  journal={arXiv preprint arXiv:2606.03498},
   year={2026}
 }
 ```
