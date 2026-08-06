@@ -35,6 +35,8 @@ The left plot validates RPD as a theoretical proxy for PD: when RPD is instantia
 
 **Paper:** [Demystifying Pipeline Parallelism: First Theory for PipeDream](https://arxiv.org/abs/2606.03498)
 
+...or you can read my [blog post](https://ivanilin.org/projects/pipeline-parallelism-theory/) on it.
+
 ## Branches
 
 - `main`: simple synthetic objectives, including block-partitioned quadratic and logistic-regression objectives.
